@@ -1,0 +1,23 @@
+{
+  "skill_name": "llm-prof",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我有一个vLLM推理qwen3-32b的prof trace文件，路径是/home/client/aliyun/public/prof/260519/bs1i900o20/1779157177645234411-rank-0.1779158488769792974.pt.trace.json.gz，帮我分析一下prefill和decode阶段各算子的耗时占比",
+      "expected_output": "输出prefill和decode两个表格，每个表格包含gemm、通信、fa、triton、其他elementwise、memcpy/memset六类的总耗时、调用次数、占比",
+      "files": ["/home/client/aliyun/public/prof/260519/bs1i900o20/1779157177645234411-rank-0.1779158488769792974.pt.trace.json.gz"]
+    },
+    {
+      "id": 2,
+      "prompt": "帮我用vLLM启动qwen3-32b模型的推理服务，然后做一个profiling分析，模型路径是/home/client/aliyun/quant/Qwen3-32B-channelwise-fp8，用单卡",
+      "expected_output": "启动vLLM服务，验证服务可用，执行prof bench，分析trace文件，输出算子耗时表格",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "我要分析SGLang推理的prof数据，trace文件在/home/client/aliyun/prof/sgl-qwen35/目录下，需要看prefill和decode的算子耗时分布",
+      "expected_output": "找到trace文件，使用分析脚本解析，输出两个阶段的算子分类统计表",
+      "files": []
+    }
+  ]
+}
