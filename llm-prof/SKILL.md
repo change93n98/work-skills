@@ -22,6 +22,15 @@ description: >
 | 输出长度 | random-output-len | 20（建议20，避免prof文件过大） |
 | 运行目录 | 存放日志和prof文件的目录 | /home/client/aliyun/prof/qwen3-32b-0519 |
 
+**多模态模型额外参数**（Qwen2.5-VL、InternVL 等视觉语言模型需要）：
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| 多模态类型 | image / video | image |
+| 每请求图片数 | 每个请求输入的图片数量 | 10 |
+| 图片分辨率 | (H, W, 帧数) | (480, 854, 1) |
+| max_pixels | mm-processor-kwargs 中的图片像素上限 | 409920 |
+
 运行目录用于存放本次运行的所有产出物，便于后续回溯：
 ```
 <运行目录>/
@@ -99,11 +108,24 @@ export GPU_MAX_HW_QUEUES=3
 # prof输出目录设为运行目录下的子目录
 export VLLM_TORCH_PROFILER_DIR="$RUN_DIR/prof"
 
+# 纯文本模型
 vllm serve <model_path> \
     -tp <tp> -pp <pp> \
     --port $PORT \
     --dtype auto \
     --kv-cache-dtype fp8_e4m3 \
+    --profiler-config "{\"profiler\": \"torch\", \"torch_profiler_dir\": \"$RUN_DIR/prof\", \"torch_profiler_with_stack\": true, \"torch_profiler_record_shapes\": true}" \
+    > "$RUN_DIR/serve.log" 2>&1 &
+echo $! > "$RUN_DIR/serve.pid"
+
+# 多模态模型（如 Qwen2.5-VL）额外需要：
+vllm serve <model_path> \
+    -tp <tp> -pp <pp> \
+    --port $PORT \
+    --no-enable-prefix-caching \
+    --enable-chunked-prefill \
+    --limit-mm-per-prompt '{"image": <n_image>, "video": 0}' \
+    --mm-processor-kwargs '{"max_pixels": <max_pixels>}' \
     --profiler-config "{\"profiler\": \"torch\", \"torch_profiler_dir\": \"$RUN_DIR/prof\", \"torch_profiler_with_stack\": true, \"torch_profiler_record_shapes\": true}" \
     > "$RUN_DIR/serve.log" 2>&1 &
 echo $! > "$RUN_DIR/serve.pid"
@@ -148,6 +170,11 @@ GPU: $HIP_VISIBLE_DEVICES
 Concurrency: <concurrency>
 Input len: <input_len>
 Output len: <output_len>
+Multimodal: <yes|no>
+  Type: <image|video>
+  Items per request: <n>
+  Resolution: <H>x<W>x<frames>
+  max_pixels: <max_pixels>
 Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
 EOF
 ```
@@ -168,17 +195,44 @@ curl -s http://localhost:$PORT/v1/chat/completions \
 
 参考: `references/vllm-bench-h.log`
 
+**纯文本模型：**
 ```bash
 vllm bench serve \
+  --backend openai-chat \
   --model <model_path> \
+  --endpoint /v1/chat/completions \
   --dataset-name random \
   --num-prompts <concurrency> \
   --max-concurrency <concurrency> \
   --random-input-len <input_len> \
   --random-output-len <output_len> \
-  --profile --trust-remote-code --port $PORT \
+  --ignore-eos --profile --port $PORT \
   > "$RUN_DIR/bench.log" 2>&1
 ```
+
+**多模态模型（如 Qwen2.5-VL）：**
+```bash
+vllm bench serve \
+  --backend openai-chat \
+  --model <model_path> \
+  --endpoint /v1/chat/completions \
+  --dataset-name random-mm \
+  --num-prompts <concurrency> \
+  --max-concurrency <concurrency> \
+  --random-input-len <input_len> \
+  --random-output-len <output_len> \
+  --random-mm-base-items-per-request <n_image> \
+  --random-mm-limit-mm-per-prompt '{"image": <n_image>, "video": 0}' \
+  --random-mm-bucket-config '{(<H>, <W>, 1): 1.0}' \
+  --ignore-eos --profile --port $PORT \
+  > "$RUN_DIR/bench.log" 2>&1
+```
+
+多模态参数说明：
+- `--dataset-name random-mm`：使用随机多模态数据集
+- `--random-mm-base-items-per-request`：每请求的图片/视频基准数量
+- `--random-mm-limit-mm-per-prompt`：每请求多模态数量上限，格式同 serve 的 `--limit-mm-per-prompt`
+- `--random-mm-bucket-config`：图片/视频分辨率桶配置，key 为 `(H, W, 帧数)`，value 为采样概率（需归一化）
 
 ### SGLang
 
