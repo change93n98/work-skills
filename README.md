@@ -1,29 +1,265 @@
 # Work Skills
 
-Claude Code 自定义 skills 集合，用于 GPU 性能分析和 benchmark 对比。
+Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU 性能分析工具。包含两个独立 skill：BLAS GEMM 性能对比和大模型推理 Profiling 分析。
 
-## Skills
+## 目录
 
-### blas-compare
+- [安装](#安装)
+- [Skill 1: blas-compare](#skill-1-blas-compare---gemm-性能对比)
+- [Skill 2: llm-prof](#skill-2-llm-prof---大模型推理-profiling-分析)
+- [项目结构](#项目结构)
+- [依赖](#依赖)
 
-BLAS GEMM 单测性能对比。从 CSV 文件读取 `rocblas-bench` 命令，在空闲 GPU 上分别执行基线和优化后的 rocBLAS 库，自动采集 GFLOPS、耗时和 gemm kernel 全称，生成对比表格。
+---
 
-- 自动查找空闲 GPU（VRAM% 和 HCU% 都为 0）
-- 通过 `TENSILE_DB=0x8000` 提取 gemm kernel 完整名称
-- 输出 results.csv 和 Markdown 对比表格
+## 安装
 
-触发词：`blas对比`、`blas-compare`、`gemm性能对比`、`rocblas对比`、`blas测试`
+将 skill 目录复制到 Claude Code 的 skills 目录下即可自动加载：
 
-### llm-prof
+```bash
+cp -r blas-compare ~/.claude/skills/
+cp -r llm-prof ~/.claude/skills/
+```
 
-大模型推理 profiling 分析。启动 vLLM/SGLang 服务，执行 bench profiling，分析 trace 输出 prefill 和 decode 算子耗时汇总表。也支持直接分析已有的 trace 文件（快速模式）。
+安装后在 Claude Code 对话中触发对应关键词即可调用。
 
-- 支持 vLLM 和 SGLang 两种推理框架
-- 自动解析 Chrome trace 格式
-- 按 prefill/decode 阶段分组统计算子耗时
+---
 
-触发词：`prof分析`、`profiling`、`算子耗时`、`推理性能`、`trace分析`、`分析trace`
+## Skill 1: blas-compare - GEMM 性能对比
 
-## 使用方式
+### 功能
 
-将 skill 目录复制到 `~/.claude/skills/` 下，Claude Code 会自动加载。在对话中触发对应关键词即可调用。
+从 CSV 文件批量读取 `rocblas-bench` 命令，在同一张 DCU 上分别执行**基线**和**优化后**的 rocBLAS 库，自动采集 GFLOPS 和耗时，生成对比表格。用于验证自编译 rocBLAS 的 kernel 优化效果。
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| 自动选卡 | 通过 `hy-smi` 查找 VRAM% 和 HCU% 都为 0 的空闲 GPU，无需手动指定 |
+| Kernel 识别 | 通过 `TENSILE_DB=0x8000` 环境变量启用 Tensile 调试输出，提取 gemm kernel 完整名称（如 `Cijk_Ailk_Bjlk_BH...`） |
+| 参数解析 | 自动从 CSV 命令中解析 m、n、k、transpose、data type 等全部 GEMM 参数 |
+| 结果汇总 | 输出 `results.csv`（结构化数据）和 `comparison_table.md`（Markdown 表格），并计算 GFLOPS 和耗时的百分比变化 |
+
+### 触发词
+
+`blas对比`、`blas-compare`、`gemm性能对比`、`rocblas对比`、`blas测试`
+
+### 输入
+
+CSV 文件，每行格式为 `<次数> ./rocblas-bench -f gemm_ex --transposeA N ...`，示例：
+
+```csv
+16320 ./rocblas-bench -f gemm_ex --transposeA N --transposeB N -m 8192 -n 1 -k 7392 --alpha 1 --a_type bf16_r --lda 8192 --b_type bf16_r --ldb 7392 --beta 0 --c_type bf16_r --ldc 8192 --d_type bf16_r --ldd 8192 --compute_type f32_r --algo 0 --solution_index 0 --flags 0
+```
+
+开头的数字是次数元数据，执行时会被忽略。
+
+### 输出
+
+```
+<输出目录>/
+├── run_benchmarks.sh       # 执行脚本（可独立复用）
+├── results.csv             # 汇总结果（含所有参数和性能数据）
+├── comparison_table.md     # Markdown 对比表格
+└── logs/
+    ├── baseline/           # 基线执行日志
+    │   ├── line_1_m8192_n1_k7392.log
+    │   └── ...
+    └── optimized/          # 优化后执行日志
+        ├── line_1_m8192_n1_k7392.log
+        └── ...
+```
+
+### 输出字段
+
+| 字段 | 含义 |
+|------|------|
+| `baseline_kernel` / `optimized_kernel` | gemm kernel 全称（从 TENSILE_DB 调试输出解析） |
+| `baseline_gflops` / `optimized_gflops` | 吞吐量 (GFLOPS) |
+| `baseline_us` / `optimized_us` | 耗时 (微秒) |
+| `gflops_pct` | 优化后 / 基线 GFLOPS × 100%（>100% 表示吞吐提升） |
+| `us_pct` | 基线 / 优化后耗时 × 100%（>100% 表示耗时缩短） |
+
+### 使用流程
+
+1. 准备包含 `rocblas-bench` 命令的 CSV 文件
+2. 提供自编译的优化后 rocBLAS 库路径（`librocblas.so` 所在目录）
+3. 在 Claude Code 中说"blas对比"或类似关键词
+4. Skill 自动查找空闲 GPU、执行 benchmark、生成对比表格
+
+### 注意事项
+
+- 每条命令执行约 10-30 秒，15 条命令全流程约 10 分钟
+- 需要 `rocblas-bench` 可执行权限：`chmod +x /opt/dtk/lib/rocblas/benchmark_tool/rocblas-bench`
+- 超时默认 300 秒，可在脚本中调整
+
+---
+
+## Skill 2: llm-prof - 大模型推理 Profiling 分析
+
+### 功能
+
+端到端的大模型推理性能分析工具。支持两种模式：
+
+1. **完整模式**：启动 vLLM/SGLang 推理服务 → 执行 bench profiling → 分析 trace 文件 → 输出算子耗时报告
+2. **快速模式**：直接分析已有的 trace 文件（跳过服务启动和 bench 步骤）
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| 双框架支持 | 同时支持 vLLM 和 SGLang 推理框架 |
+| 多模态支持 | 支持 Qwen2.5-VL、InternVL 等视觉语言模型的 profiling |
+| 阶段划分 | 自动区分 Prefill 和 Decode 阶段，按 step 粒度分析 |
+| 算子分类 | 将 kernel 归为 6 大类：gemm、通信、FlashAttention、Triton、其他 elementwise、memcpy/memset |
+| 多格式输出 | Excel 报告（4 个子表）、文本摘要、JSON 结构化数据 |
+| 空泡分析 | 区分"相对占比"（仅 kernel 时间）和"绝对占比"（含 GPU idle） |
+
+### 触发词
+
+`prof分析`、`profiling`、`算子耗时`、`推理性能`、`trace分析`、`分析trace`
+
+### 运行目录结构
+
+每次 profiling 运行的所有产出物统一存放在运行目录下，便于回溯：
+
+```
+<运行目录>/
+├── serve_config.txt           # 环境变量 + 启动命令记录
+├── serve.log                  # 服务端日志
+├── serve.pid                  # 服务进程 ID
+├── bench.log                  # bench 客户端日志
+├── prof/                      # prof trace 文件目录
+│   └── *.json.gz
+├── prof_analysis.xlsx         # 分析报告（4 个子表）
+├── prof_analysis_summary.txt  # 文本摘要
+└── prof_analysis.json         # JSON 结果
+```
+
+### 分析输出
+
+#### Excel 报告（4 个子表）
+
+| Sheet | 内容 | 关键列 |
+|-------|------|--------|
+| Prefill 详细算子 | 每个 kernel 的耗时明细 | 算子名称、分类、调用次数、总耗时(us)、平均耗时(us)、相对占比(%)、绝对占比(%) |
+| Prefill 分类汇总 | 按 6 大类汇总 | 分类、算子种类数、调用次数、总耗时(ms)、相对占比(%) |
+| Decode-Step2 详细算子 | 每个 kernel 的耗时明细 | 同上 |
+| Decode-Step2 分类汇总 | 按 6 大类汇总 | 同上 |
+
+#### 终端输出示例
+
+```
+============================================================
+  Prefill阶段算子耗时分析
+============================================================
+类别                  总耗时(ms)    调用次数    占比(%)
+------------------------------------------------------------
+gemm                      50.02        591     44.37%
+通信 (comm)                 0.00          0      0.00%
+FlashAttention (fa)        4.95          8      4.39%
+Triton                    17.73        489     15.72%
+其他elementwise            40.05        200     35.52%
+memcpy/memset               0.00          0      0.00%
+------------------------------------------------------------
+总计                      112.74       1288    100.00%
+============================================================
+```
+
+### 快速模式
+
+如果已有 trace 文件，可跳过服务启动和 bench 步骤，直接分析：
+
+```bash
+python3 scripts/prof_analyze.py \
+  --trace-file <trace.json.gz> \
+  --output-dir <output_dir> \
+  --decode-step 2 \
+  --verbose
+```
+
+### 脚本说明
+
+| 脚本 | 用途 |
+|------|------|
+| `scripts/prof_analyze.py` | 主分析脚本，解析 Chrome trace JSON，输出 XLSX/TXT/JSON |
+| `scripts/prof_analyze_perfetto.py` | 基于 Perfetto trace_processor 的备选分析器（`pip install perfetto`） |
+| `scripts/quick_prof.sh` | 一键 profiling 脚本，自动完成服务启动 → bench → 分析全流程 |
+
+### 参考文件（`references/` 目录）
+
+| 文件 | 内容 |
+|------|------|
+| `vllm-serve-h.log` / `sgl-serve-h.log` | serve 命令参数帮助 |
+| `vllm-bench-h.log` / `sgl-bench-h.log` | bench 命令参数帮助 |
+| `vllm-serve-example.sh` / `sglang-serve-example.sh` | 启动脚本示例 |
+| `vllm-prof-guide.md` / `sglang-prof-guide.md` | 各框架 profiling 指南 |
+| `prof算子耗时占比分析.pdf` | 分析原理文档 |
+| `perfetto-sql-py工具.pdf` | Perfetto SQL 工具使用说明 |
+
+---
+
+## 项目结构
+
+```
+work-skills/
+├── README.md
+├── blas-compare/
+│   └── SKILL.md                          # blas-compare skill 定义（含完整执行逻辑）
+└── llm-prof/
+    ├── SKILL.md                          # llm-prof skill 定义（含完整执行流程）
+    ├── scripts/
+    │   ├── prof_analyze.py               # 主分析脚本（Chrome trace → XLSX/TXT/JSON）
+    │   ├── prof_analyze_perfetto.py      # Perfetto 版分析器
+    │   └── quick_prof.sh                 # 一键 profiling 脚本
+    ├── references/                       # 参考文档和示例
+    │   ├── vllm-serve-example.sh
+    │   ├── sglang-serve-example.sh
+    │   ├── vllm-serve-h.log
+    │   ├── vllm-bench-h.log
+    │   ├── sgl-serve-h.log
+    │   ├── sgl-bench-h.log
+    │   ├── vllm-prof-guide.md
+    │   ├── sglang-prof-guide.md
+    │   ├── prof算子耗时占比分析.pdf
+    │   └── perfetto-sql-py工具.pdf
+    └── evals/
+        └── evals.json                    # Skill 测试用例
+```
+
+### Skill 文件说明
+
+每个 skill 由一个 `SKILL.md` 文件定义，包含：
+
+- **元信息**：名称、描述、触发词
+- **参数表**：需要向用户收集的输入参数
+- **执行步骤**：完整的 step-by-step 流程（含可直接复用的代码片段）
+- **输出格式**：预期产出物和字段说明
+- **注意事项**：边界条件和常见问题
+
+Claude Code 加载 skill 后，会根据 `SKILL.md` 中的指令自动编排执行流程。
+
+---
+
+## 依赖
+
+### 环境要求
+
+- 海光 DCU 环境（ROCm/HIP）
+- `hy-smi` 命令（DCU 状态查询）
+- Python 3
+
+### Python 包
+
+| 包 | 用于 | 安装 |
+|----|------|------|
+| `openpyxl` | llm-prof Excel 报告生成 | `pip install openpyxl` |
+| `perfetto` | llm-prof Perfetto 版分析器（可选） | `pip install perfetto` |
+
+### 系统工具
+
+| 工具 | 用于 | 说明 |
+|------|------|------|
+| `rocblas-bench` | blas-compare benchmark 执行 | 默认路径 `/opt/dtk/lib/rocblas/benchmark_tool/rocblas-bench` |
+| `vllm` | llm-prof vLLM 推理服务 | `pip install vllm` |
+| `sglang` | llm-prof SGLang 推理服务 | `pip install sglang` |
