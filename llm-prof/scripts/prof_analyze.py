@@ -312,28 +312,59 @@ def analyze_kernels(kernels: list) -> dict:
     return result
 
 
-def format_table(phase_name: str, stats: dict) -> str:
-    """Format analysis results as a table."""
+def format_table(phase_name: str, stats: dict, phase_duration_us: float = 0) -> str:
+    """Format analysis results as a table.
+
+    If phase_duration_us is provided, adds bubble row and absolute percentage.
+    """
     lines = []
-    lines.append(f"\n{'=' * 60}")
+    lines.append(f"\n{'=' * 70}")
     lines.append(f"  {phase_name}算子耗时分析")
-    lines.append(f"{'=' * 60}")
-    lines.append(f"{'类别':<20s} {'总耗时(ms)':>12s} {'调用次数':>10s} {'占比(%)':>10s}")
-    lines.append(f"{'-' * 60}")
+    lines.append(f"{'=' * 70}")
+    if phase_duration_us > 0:
+        lines.append(f"{'类别':<20s} {'总耗时(ms)':>12s} {'调用次数':>10s} {'相对占比(%)':>12s} {'绝对占比(%)':>12s}")
+    else:
+        lines.append(f"{'类别':<20s} {'总耗时(ms)':>12s} {'调用次数':>10s} {'占比(%)':>10s}")
+    lines.append(f"{'-' * 70}")
 
     order = ["gemm", "通信 (comm)", "FlashAttention (fa)", "Triton",
-             "其他elementwise", "memcpy/memset", "总计"]
+             "其他elementwise", "memcpy/memset"]
+
+    total_kernel_ms = sum(stats[cat]["total_dur_ms"] for cat in order if cat in stats)
 
     for cat in order:
         if cat in stats:
             s = stats[cat]
-            if cat == "总计":
-                lines.append(f"{'-' * 60}")
-            lines.append(
-                f"{cat:<20s} {s['total_dur_ms']:>12.2f} {s['count']:>10d} {s['percentage']:>9.2f}%"
-            )
+            if phase_duration_us > 0:
+                abs_pct = (s["total_dur_ms"] * 1000 / phase_duration_us * 100) if phase_duration_us > 0 else 0
+                lines.append(
+                    f"{cat:<20s} {s['total_dur_ms']:>12.2f} {s['count']:>10d} {s['percentage']:>11.2f}% {abs_pct:>11.2f}%"
+                )
+            else:
+                lines.append(
+                    f"{cat:<20s} {s['total_dur_ms']:>12.2f} {s['count']:>10d} {s['percentage']:>9.2f}%"
+                )
 
-    lines.append(f"{'=' * 60}")
+    # Bubble row
+    if phase_duration_us > 0:
+        phase_dur_ms = phase_duration_us / 1000
+        bubble_ms = max(phase_dur_ms - total_kernel_ms, 0)
+        bubble_pct = (bubble_ms / phase_dur_ms * 100) if phase_dur_ms > 0 else 0
+        lines.append(f"{'-' * 70}")
+        lines.append(
+            f"{'空泡 (bubble)':<20s} {bubble_ms:>12.2f} {'':>10s} {'':>12s} {bubble_pct:>11.2f}%"
+        )
+
+    lines.append(f"{'-' * 70}")
+    if phase_duration_us > 0:
+        lines.append(
+            f"{'总计':<20s} {phase_duration_us/1000:>12.2f} {'':>10s} {'100.00%':>12s} {'100.00%':>12s}"
+        )
+    else:
+        lines.append(
+            f"{'总计':<20s} {total_kernel_ms:>12.2f} {'':>10s} {'100.00%':>10s}"
+        )
+    lines.append(f"{'=' * 70}")
     return "\n".join(lines)
 
 
@@ -375,7 +406,8 @@ def analyze_kernels_detailed(kernels: list, phase_duration_us: float) -> list:
 
 
 def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
-              prefill_stats: dict, decode_stats: dict, decode_step: int):
+              prefill_stats: dict, decode_stats: dict, decode_step: int,
+              prefill_duration_us: float = 0, decode_duration_us: float = 0):
     """Save results to xlsx with 4 sheets."""
     if not HAS_OPENPYXL:
         print("WARNING: openpyxl not installed, skipping xlsx output")
@@ -402,6 +434,7 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
         "Triton": "DDA0DD",
         "其他elementwise": "F0E68C",
         "memcpy/memset": "FFA07A",
+        "空泡 (bubble)": "D9D9D9",
         "总计": "C0C0C0",
     }
 
@@ -445,11 +478,17 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
             max_len = max(len(str(ws.cell(row=r, column=col).value or "")) for r in range(1, len(data) + 2))
             ws.column_dimensions[get_column_letter(col)].width = min(max_len + 4, 60)
 
-    def write_summary_sheet(ws, title, detailed_data, phase_stats):
-        """Write a summary sheet grouped by category."""
+    def write_summary_sheet(ws, title, detailed_data, phase_stats, phase_duration_us):
+        """Write a summary sheet grouped by category.
+
+        phase_duration_us: total phase window time in microseconds (includes bubble).
+        相对占比 = category_dur / total_kernel_dur (不含空泡)
+        绝对占比 = category_dur / phase_duration (含空泡)
+        """
         ws.title = title
 
-        headers = ["分类", "算子种类数", "调用次数", "总耗时(us)", "总耗时(ms)", "相对占比(%)"]
+        headers = ["分类", "算子种类数", "调用次数", "总耗时(us)", "总耗时(ms)",
+                    "相对占比(%)", "绝对占比(%)"]
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=h)
             cell.font = header_font
@@ -465,7 +504,8 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
             cat_agg[cat]["call_count"] += item["call_count"]
             cat_agg[cat]["total_dur"] += item["total_duration_us"]
 
-        total_dur = sum(v["total_dur"] for v in cat_agg.values())
+        total_kernel_dur = sum(v["total_dur"] for v in cat_agg.values())
+        bubble_dur = phase_duration_us - total_kernel_dur
 
         order = ["gemm", "通信 (comm)", "FlashAttention (fa)", "Triton",
                  "其他elementwise", "memcpy/memset"]
@@ -473,7 +513,8 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
         for cat in order:
             if cat in cat_agg:
                 agg = cat_agg[cat]
-                pct = (agg["total_dur"] / total_dur * 100) if total_dur > 0 else 0
+                rel_pct = (agg["total_dur"] / total_kernel_dur * 100) if total_kernel_dur > 0 else 0
+                abs_pct = (agg["total_dur"] / phase_duration_us * 100) if phase_duration_us > 0 else 0
 
                 ws.cell(row=row, column=1, value=cat).border = thin_border
                 ws.cell(row=row, column=2, value=agg["kernel_count"]).border = thin_border
@@ -489,9 +530,13 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
                 c5.border = thin_border
                 c5.number_format = '#,##0.00'
 
-                c6 = ws.cell(row=row, column=6, value=round(pct, 2))
+                c6 = ws.cell(row=row, column=6, value=round(rel_pct, 2))
                 c6.border = thin_border
                 c6.number_format = '0.00'
+
+                c7 = ws.cell(row=row, column=7, value=round(abs_pct, 2))
+                c7.border = thin_border
+                c7.number_format = '0.00'
 
                 # Color the category cell
                 if cat in cat_colors:
@@ -501,7 +546,33 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
 
                 row += 1
 
-        # Total row
+        # Bubble row (空泡 = phase window - all kernel time)
+        bubble_dur_us = max(bubble_dur, 0)
+        bubble_abs_pct = (bubble_dur_us / phase_duration_us * 100) if phase_duration_us > 0 else 0
+
+        ws.cell(row=row, column=1, value="空泡 (bubble)").border = thin_border
+        ws.cell(row=row, column=2, value=0).border = thin_border
+        ws.cell(row=row, column=2).alignment = num_align
+        ws.cell(row=row, column=3, value=0).border = thin_border
+        ws.cell(row=row, column=3).alignment = num_align
+        c4 = ws.cell(row=row, column=4, value=round(bubble_dur_us, 2))
+        c4.border = thin_border
+        c4.number_format = '#,##0.00'
+        c5 = ws.cell(row=row, column=5, value=round(bubble_dur_us / 1000, 2))
+        c5.border = thin_border
+        c5.number_format = '#,##0.00'
+        c6 = ws.cell(row=row, column=6, value="—")
+        c6.border = thin_border
+        c7 = ws.cell(row=row, column=7, value=round(bubble_abs_pct, 2))
+        c7.border = thin_border
+        c7.number_format = '0.00'
+        ws.cell(row=row, column=1).fill = PatternFill(
+            start_color=cat_colors["空泡 (bubble)"], end_color=cat_colors["空泡 (bubble)"],
+            fill_type="solid"
+        )
+        row += 1
+
+        # Total row (phase window = kernel + bubble)
         for col in range(1, len(headers) + 1):
             ws.cell(row=row, column=col).border = thin_border
             ws.cell(row=row, column=col).font = Font(bold=True)
@@ -509,9 +580,10 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
         ws.cell(row=row, column=1, value="总计")
         ws.cell(row=row, column=2, value=sum(v["kernel_count"] for v in cat_agg.values()))
         ws.cell(row=row, column=3, value=sum(v["call_count"] for v in cat_agg.values()))
-        ws.cell(row=row, column=4, value=round(total_dur, 2)).number_format = '#,##0.00'
-        ws.cell(row=row, column=5, value=round(total_dur / 1000, 2)).number_format = '#,##0.00'
+        ws.cell(row=row, column=4, value=round(phase_duration_us, 2)).number_format = '#,##0.00'
+        ws.cell(row=row, column=5, value=round(phase_duration_us / 1000, 2)).number_format = '#,##0.00'
         ws.cell(row=row, column=6, value=100.00).number_format = '0.00'
+        ws.cell(row=row, column=7, value=100.00).number_format = '0.00'
 
         # Auto width
         for col in range(1, len(headers) + 1):
@@ -524,7 +596,7 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
 
     # Sheet 2: Prefill summary
     ws2 = wb.create_sheet()
-    write_summary_sheet(ws2, "Prefill分类汇总", prefill_detailed, prefill_stats)
+    write_summary_sheet(ws2, "Prefill分类汇总", prefill_detailed, prefill_stats, prefill_duration_us)
 
     # Sheet 3: Decode detailed
     ws3 = wb.create_sheet()
@@ -532,7 +604,7 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
 
     # Sheet 4: Decode summary
     ws4 = wb.create_sheet()
-    write_summary_sheet(ws4, f"Decode-Step{decode_step}分类汇总", decode_detailed, decode_stats)
+    write_summary_sheet(ws4, f"Decode-Step{decode_step}分类汇总", decode_detailed, decode_stats, decode_duration_us)
 
     xlsx_path = os.path.join(output_dir, "prof_analysis.xlsx")
     wb.save(xlsx_path)
@@ -541,7 +613,7 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
 
 def save_results(output_dir: str, prefill_stats: dict, decode_stats: dict,
                  prefill_kernels: list, decode_kernels: list, phases: dict,
-                 decode_step: int):
+                 decode_step: int, prefill_duration_us: float = 0, decode_duration_us: float = 0):
     """Save analysis results to files."""
     os.makedirs(output_dir, exist_ok=True)
 
@@ -571,8 +643,8 @@ def save_results(output_dir: str, prefill_stats: dict, decode_stats: dict,
                 gap_str = f" gap={gap_ms:.1f}ms" if i > 0 and gap_ms > 50 else ""
                 f.write(f"  Step {i} ({label}): dur={fs['dur']/1000:.2f} ms{gap_str}\n")
 
-        f.write(format_table("Prefill阶段", prefill_stats))
-        f.write(format_table(f"Decode阶段 (Step {decode_step})", decode_stats))
+        f.write(format_table("Prefill阶段", prefill_stats, prefill_duration_us))
+        f.write(format_table(f"Decode阶段 (Step {decode_step})", decode_stats, decode_duration_us))
         f.write("\n")
 
     json_path = os.path.join(output_dir, "prof_analysis.json")
@@ -669,13 +741,15 @@ def main():
     decode_detailed = analyze_kernels_detailed(decode_kernels, decode_duration)
 
     # Output
-    print(format_table("Prefill阶段", prefill_stats))
-    print(format_table(f"Decode阶段 (Step {args.decode_step})", decode_stats))
+    print(format_table("Prefill阶段", prefill_stats, prefill_duration))
+    print(format_table(f"Decode阶段 (Step {args.decode_step})", decode_stats, decode_duration))
 
     # Save
     summary_path, json_path = save_results(
         args.output_dir, prefill_stats, decode_stats,
-        prefill_kernels, decode_kernels, phases, args.decode_step
+        prefill_kernels, decode_kernels, phases, args.decode_step,
+        prefill_duration_us=prefill["end"] - prefill["start"],
+        decode_duration_us=decode["end"] - decode["start"],
     )
     print(f"\nResults saved to:")
     print(f"  Summary: {summary_path}")
@@ -684,7 +758,9 @@ def main():
     # Save xlsx
     xlsx_path = save_xlsx(
         args.output_dir, prefill_detailed, decode_detailed,
-        prefill_stats, decode_stats, args.decode_step
+        prefill_stats, decode_stats, args.decode_step,
+        prefill_duration_us=prefill["end"] - prefill["start"],
+        decode_duration_us=decode["end"] - decode["start"],
     )
     if xlsx_path:
         print(f"  XLSX: {xlsx_path}")
