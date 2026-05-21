@@ -44,6 +44,8 @@ OP_CATEGORIES = {
         "FlashAttention", "flash_attention", "FlashDecoding",
         "flash_decoding", "MHA", "mha_fwd", "mha_bwd",
         "ck_fmha", "CKFmha",
+        "page_attention", "paged_attention", "PagedAttention",
+        "PageAttention", "page_attention_v1", "page_attention_v2",
     ],
     "Triton": [
         "triton", "Triton", "triton_kernel",
