@@ -34,8 +34,10 @@ description: >
 运行目录用于存放本次运行的所有产出物，便于后续回溯：
 ```
 <运行目录>/
+├── serve.sh            # 服务启动脚本（可独立复用）
 ├── serve_config.txt    # 环境变量+启动命令
 ├── serve.log           # 服务端日志
+├── serve.pid           # 服务进程ID
 ├── bench.log           # bench客户端日志
 └── *.json.gz           # prof trace文件
 ```
@@ -95,7 +97,14 @@ fi
 
 参考: `references/vllm-serve-example.sh`、`references/vllm-serve-h.log`
 
+先将启动脚本写入运行目录，再执行：
+
 ```bash
+# 纯文本模型
+cat > "$RUN_DIR/serve.sh" << 'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+
 export HIP_VISIBLE_DEVICES=<gpu_ids>
 export HSA_FORCE_FINE_GRAIN_PCIE=1
 export NCCL_MAX_NCHANNELS=16
@@ -104,30 +113,45 @@ export ALLREDUCE_STREAM_WITH_COMPUTE=1
 export VLLM_USE_PIECEWISE=0
 export HIP_ALLOC_INITIALIZE=0
 export GPU_MAX_HW_QUEUES=3
+export VLLM_TORCH_PROFILER_DIR="$(dirname "$0")/prof"
 
-# prof输出目录设为运行目录下的子目录
-export VLLM_TORCH_PROFILER_DIR="$RUN_DIR/prof"
-
-# 纯文本模型
 vllm serve <model_path> \
     -tp <tp> -pp <pp> \
-    --port $PORT \
+    --port <port> \
     --dtype auto \
     --kv-cache-dtype fp8_e4m3 \
-    --profiler-config "{\"profiler\": \"torch\", \"torch_profiler_dir\": \"$RUN_DIR/prof\", \"torch_profiler_with_stack\": true, \"torch_profiler_record_shapes\": true}" \
-    > "$RUN_DIR/serve.log" 2>&1 &
+    --profiler-config "{\"profiler\": \"torch\", \"torch_profiler_dir\": \"$(dirname "$0")/prof\", \"torch_profiler_with_stack\": true, \"torch_profiler_record_shapes\": true}"
+SCRIPT
+chmod +x "$RUN_DIR/serve.sh"
+bash "$RUN_DIR/serve.sh" > "$RUN_DIR/serve.log" 2>&1 &
 echo $! > "$RUN_DIR/serve.pid"
 
 # 多模态模型（如 Qwen2.5-VL）额外需要：
+cat > "$RUN_DIR/serve.sh" << 'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+
+export HIP_VISIBLE_DEVICES=<gpu_ids>
+export HSA_FORCE_FINE_GRAIN_PCIE=1
+export NCCL_MAX_NCHANNELS=16
+export NCCL_MIN_NCHANNELS=16
+export ALLREDUCE_STREAM_WITH_COMPUTE=1
+export VLLM_USE_PIECEWISE=0
+export HIP_ALLOC_INITIALIZE=0
+export GPU_MAX_HW_QUEUES=3
+export VLLM_TORCH_PROFILER_DIR="$(dirname "$0")/prof"
+
 vllm serve <model_path> \
     -tp <tp> -pp <pp> \
-    --port $PORT \
+    --port <port> \
     --no-enable-prefix-caching \
     --enable-chunked-prefill \
     --limit-mm-per-prompt '{"image": <n_image>, "video": 0}' \
     --mm-processor-kwargs '{"max_pixels": <max_pixels>}' \
-    --profiler-config "{\"profiler\": \"torch\", \"torch_profiler_dir\": \"$RUN_DIR/prof\", \"torch_profiler_with_stack\": true, \"torch_profiler_record_shapes\": true}" \
-    > "$RUN_DIR/serve.log" 2>&1 &
+    --profiler-config "{\"profiler\": \"torch\", \"torch_profiler_dir\": \"$(dirname "$0")/prof\", \"torch_profiler_with_stack\": true, \"torch_profiler_record_shapes\": true}"
+SCRIPT
+chmod +x "$RUN_DIR/serve.sh"
+bash "$RUN_DIR/serve.sh" > "$RUN_DIR/serve.log" 2>&1 &
 echo $! > "$RUN_DIR/serve.pid"
 ```
 
@@ -136,6 +160,10 @@ echo $! > "$RUN_DIR/serve.pid"
 参考: `references/sglang-serve-example.sh`、`references/sgl-serve-h.log`
 
 ```bash
+cat > "$RUN_DIR/serve.sh" << 'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+
 export HIP_VISIBLE_DEVICES=<gpu_ids>
 export SGLANG_ENABLE_SPEC_V2=1
 export USE_DCU_CUSTOM_ALLREDUCE=1
@@ -146,15 +174,17 @@ export SGLANG_USE_FP8_W8A8_MOE=1
 
 sglang serve \
     --model-path <model_path> \
-    --host 0.0.0.0 --port $PORT \
+    --host 0.0.0.0 --port <port> \
     --trust-remote-code --dtype bfloat16 \
     --kv-cache fp8_e4m3 \
     --tp-size <tp> --pp-size <pp> \
     --mem-fraction-static 0.85 \
     --attention-backend fa3 \
     --page-size 64 \
-    --cuda-graph-max-bs 512 \
-    > "$RUN_DIR/serve.log" 2>&1 &
+    --cuda-graph-max-bs 512
+SCRIPT
+chmod +x "$RUN_DIR/serve.sh"
+bash "$RUN_DIR/serve.sh" > "$RUN_DIR/serve.log" 2>&1 &
 echo $! > "$RUN_DIR/serve.pid"
 ```
 
@@ -267,6 +297,7 @@ python3 scripts/prof_analyze.py --trace-file "$TRACE_FILE" --output-dir "$RUN_DI
 分析完成后运行目录结构：
 ```
 $RUN_DIR/
+├── serve.sh                   # 服务启动脚本（可独立复用）
 ├── serve_config.txt           # 启动配置
 ├── serve.log                  # 服务端日志
 ├── serve.pid                  # 服务进程ID

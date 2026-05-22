@@ -125,6 +125,7 @@ CSV 文件，每行格式为 `<次数> ./rocblas-bench -f gemm_ex --transposeA N
 
 ```
 <运行目录>/
+├── serve.sh                   # 服务启动脚本（可独立复用）
 ├── serve_config.txt           # 环境变量 + 启动命令记录
 ├── serve.log                  # 服务端日志
 ├── serve.pid                  # 服务进程 ID
