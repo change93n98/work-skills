@@ -1,13 +1,12 @@
 # Work Skills
 
-Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU 性能分析工具。包含三个独立 skill：BLAS GEMM 性能对比、hipBLASLt GEMM 性能对比和大模型推理 Profiling 分析。
+Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU 性能分析工具。包含两个独立 skill：BLAS GEMM 性能对比和大模型推理 Profiling 分析。
 
 ## 目录
 
 - [安装](#安装)
 - [Skill 1: blas-compare](#skill-1-blas-compare---gemm-性能对比)
-- [Skill 2: blaslt-compare](#skill-2-blaslt-compare---hipblaslt-gemm-性能对比)
-- [Skill 3: llm-prof](#skill-3-llm-prof---大模型推理-profiling-分析)
+- [Skill 2: llm-prof](#skill-2-llm-prof---大模型推理-profiling-分析)
 - [项目结构](#项目结构)
 - [依赖](#依赖)
 
@@ -19,7 +18,6 @@ Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU
 
 ```bash
 cp -r blas-compare ~/.claude/skills/
-cp -r blaslt-compare ~/.claude/skills/
 cp -r llm-prof ~/.claude/skills/
 ```
 
@@ -65,7 +63,11 @@ CSV 文件，每行格式为 `<次数> ./rocblas-bench -f gemm_ex --transposeA N
 ├── comparison_table.md     # Markdown 对比表格
 └── logs/
     ├── baseline/           # 基线执行日志
+    │   ├── line_1_m8192_n1_k7392.log
+    │   └── ...
     └── optimized/          # 优化后执行日志
+        ├── line_1_m8192_n1_k7392.log
+        └── ...
 ```
 
 ### 输出字段
@@ -93,73 +95,7 @@ CSV 文件，每行格式为 `<次数> ./rocblas-bench -f gemm_ex --transposeA N
 
 ---
 
-## Skill 2: blaslt-compare - hipBLASLt GEMM 性能对比
-
-### 功能
-
-从命令文件批量读取 `hipblaslt-bench` 命令，在同一张 DCU 上分别执行**基线**和**优化后**的 hipBLASLt 库，自动采集 GFLOPS、耗时和 kernel 名称，生成 `results.csv`。用于验证自编译 hipBLASLt 的 kernel 优化效果（W8A8 等量化 GEMM 场景）。
-
-### 核心特性
-
-| 特性 | 说明 |
-|------|------|
-| 自动选卡 | 通过 `hy-smi` 查找 VRAM% 和 HCU% 都为 0 的空闲 GPU，无需手动指定 |
-| Kernel 识别 | 通过 `--print_kernel_info` 参数获取选定的 kernel 全称（如 `Cijk_Alik_Bljk_F8BS_MT16x16x64_...`） |
-| 参数解析 | 自动从命令中解析 m、n、k、transA、transB、data type、bias、scale 等全部参数 |
-| 限流重试 | 内置指数退避重试机制，自动处理 DCU 集群的 rate limit 错误 |
-| 结果汇总 | 输出 `results.csv`，包含基线/优化后的 kernel 名称、GFLOPS、耗时及百分比变化 |
-
-### 触发词
-
-`blaslt对比`、`blaslt-compare`、`hipblaslt对比`、`blaslt测试`、`blaslt性能对比`
-
-### 输入
-
-命令文件，每行一条完整的 `hipblaslt-bench` 命令，示例：
-
-```
-hipblaslt-bench --api_method c -m 10240 -n 1 -k 8192 --lda 8192 --ldb 8192 --ldc 10240 --ldd 10240 --stride_a 0 --stride_b 0 --stride_c 0 --stride_d 0 --alpha 1.000000 --beta 0.000000 --transA T --transB N --batch_count 1 --scaleA 2 --scaleB 2 --bias_vector --bias_source d --a_type f8_r --b_type f8_r --c_type bf16_r --d_type bf16_r --scale_type f32_r --bias_type f16_r --compute_type f32_r --activation_type none
-```
-
-### 输出
-
-```
-<输出目录>/
-├── run_benchmarks.sh       # 执行脚本（可独立复用）
-├── results.csv             # 汇总结果（含kernel名称、GFLOPS、耗时、百分比）
-└── logs/
-    ├── baseline/           # 基线执行日志
-    └── optimized/          # 优化后执行日志
-```
-
-### 输出字段
-
-| 字段 | 含义 |
-|------|------|
-| `baseline_kernel` / `optimized_kernel` | gemm kernel 全称（从 `--print_kernel_info` 输出解析） |
-| `baseline_gflops` / `optimized_gflops` | 吞吐量 (GFLOPS) |
-| `baseline_us` / `optimized_us` | 耗时 (微秒) |
-| `gflops_pct` | 优化后 / 基线 GFLOPS × 100%（>100% 表示吞吐提升） |
-| `us_pct` | 基线 / 优化后耗时 × 100%（>100% 表示耗时缩短） |
-
-### 使用流程
-
-1. 准备包含 `hipblaslt-bench` 命令的文件（每行一条命令）
-2. 提供自编译的优化后 hipBLASLt 库路径（`libhipblaslt.so` 所在目录）
-3. 在 Claude Code 中说"blaslt对比"或类似关键词
-4. Skill 自动查找空闲 GPU、执行 benchmark、生成 results.csv
-
-### 注意事项
-
-- 每条命令执行约 3-10 秒，24 条命令全流程约 5-10 分钟
-- 需要 `hipblaslt-bench` 可执行权限：`chmod +x /opt/dtk/lib/hipblaslt/benchmark_tool/hipblaslt-bench`
-- 优化库通过 `LD_LIBRARY_PATH` 注入，不影响系统默认库
-- 脚本内置重试机制，自动处理 DCU 集群限流（rate limit）错误
-- 超时默认 300 秒，可在脚本中调整
-
----
-
-## Skill 3: llm-prof - 大模型推理 Profiling 分析
+## Skill 2: llm-prof - 大模型推理 Profiling 分析
 
 ### 功能
 
@@ -270,9 +206,7 @@ python3 scripts/prof_analyze.py \
 work-skills/
 ├── README.md
 ├── blas-compare/
-│   └── SKILL.md                          # blas-compare skill 定义（rocBLAS GEMM 对比）
-├── blaslt-compare/
-│   └── SKILL.md                          # blaslt-compare skill 定义（hipBLASLt GEMM 对比）
+│   └── SKILL.md                          # blas-compare skill 定义（含完整执行逻辑）
 └── llm-prof/
     ├── SKILL.md                          # llm-prof skill 定义（含完整执行流程）
     ├── scripts/
@@ -328,6 +262,5 @@ Claude Code 加载 skill 后，会根据 `SKILL.md` 中的指令自动编排执�
 | 工具 | 用于 | 说明 |
 |------|------|------|
 | `rocblas-bench` | blas-compare benchmark 执行 | 默认路径 `/opt/dtk/lib/rocblas/benchmark_tool/rocblas-bench` |
-| `hipblaslt-bench` | blaslt-compare benchmark 执行 | 默认路径 `/opt/dtk/lib/hipblaslt/benchmark_tool/hipblaslt-bench` |
 | `vllm` | llm-prof vLLM 推理服务 | `pip install vllm` |
 | `sglang` | llm-prof SGLang 推理服务 | `pip install sglang` |
