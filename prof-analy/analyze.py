@@ -26,6 +26,18 @@ except ImportError:
 class ProfAnalyzer:
     """性能分析器"""
 
+    # 分类颜色映射（与参考报告一致）
+    CATEGORY_COLORS = {
+        'gemm':         'FFD700',
+        'attention':    'C6EFCE',
+        'conv_bn':      'B4C6E7',
+        'norm':         'DDA0DD',
+        'elementwise':  'F0E68C',
+        '访存':          'FFA07A',
+        'at::native':   'F5F5F5',
+        '空泡 (bubble)': 'D9D9D9',
+    }
+
     def __init__(self):
         # 算子分类规则 - 按优先级排序
         # 注意：conv_bn必须在gemm之前，因为conv算子名称中可能包含'implicitgemm'
@@ -92,7 +104,7 @@ class ProfAnalyzer:
 
         return 'at::native'
 
-    def analyze_events(self, events: List[Dict]) -> Tuple[Dict, Dict]:
+    def analyze_events(self, events: List[Dict]) -> Tuple[Dict, Dict, float, float]:
         """分析事件数据，只关注GPU kernel事件"""
         # 算子统计
         operator_stats = defaultdict(lambda: {
@@ -109,8 +121,12 @@ class ProfAnalyzer:
             'total_dur': 0.0
         })
 
-        # 总耗时
+        # 总耗时（kernel时间之和）
         total_dur = 0.0
+
+        # GPU trace 时间范围（用于计算空泡）
+        gpu_min_ts = float('inf')
+        gpu_max_end = 0.0
 
         # 处理每个事件 - 只关注GPU kernel事件
         for event in events:
@@ -119,6 +135,7 @@ class ProfAnalyzer:
 
             name = event.get('name', '')
             dur = event.get('dur', 0.0)
+            ts = event.get('ts', 0.0)
             cat = event.get('cat', '')
 
             # 只处理kernel类别和gpu_memcpy类别的事件
@@ -128,6 +145,12 @@ class ProfAnalyzer:
             # 跳过一些非算子事件
             if not name or dur == 0:
                 continue
+
+            # 更新GPU时间范围
+            if ts < gpu_min_ts:
+                gpu_min_ts = ts
+            if ts + dur > gpu_max_end:
+                gpu_max_end = ts + dur
 
             # 分类算子
             category = self.classify_operator(name)
@@ -152,7 +175,13 @@ class ProfAnalyzer:
             if stats['count'] > 0:
                 stats['avg_dur'] = stats['total_dur'] / stats['count']
 
-        return operator_stats, category_stats, total_dur
+        # 计算GPU trace总时长（含空泡）
+        if gpu_min_ts < float('inf'):
+            gpu_total_dur = gpu_max_end - gpu_min_ts
+        else:
+            gpu_total_dur = total_dur
+
+        return operator_stats, category_stats, total_dur, gpu_total_dur
 
     def calculate_percentages(self, operator_stats: Dict, category_stats: Dict, total_dur: float):
         """计算百分比"""
@@ -164,8 +193,24 @@ class ProfAnalyzer:
         for category, stats in category_stats.items():
             stats['relative_pct'] = (stats['total_dur'] / total_dur * 100) if total_dur > 0 else 0
 
+    def _apply_header_style(self, ws, headers, row=1):
+        """应用表头样式：蓝底白色加粗字体"""
+        header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+        header_font = Font(bold=True, color='FFFFFF')
+        header_align = Alignment(horizontal='center')
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=row, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+
+    def _apply_category_color(self, cell, category):
+        """给分类单元格上色"""
+        color = self.CATEGORY_COLORS.get(category, 'F5F5F5')
+        cell.fill = PatternFill(start_color=color, end_color=color, fill_type='solid')
+
     def create_excel_report(self, operator_stats: Dict, category_stats: Dict,
-                           total_dur: float, output_path: str):
+                           total_dur: float, gpu_total_dur: float, output_path: str):
         """创建Excel报告"""
         wb = Workbook()
 
@@ -175,10 +220,7 @@ class ProfAnalyzer:
 
         # 表头
         headers1 = ['算子名称', '分类', '调用次数', '总耗时(us)', '平均耗时(us)', '相对占比(%)', '绝对占比(%)']
-        for col, header in enumerate(headers1, 1):
-            cell = ws1.cell(row=1, column=col, value=header)
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal='center')
+        self._apply_header_style(ws1, headers1)
 
         # 数据
         row = 2
@@ -188,13 +230,14 @@ class ProfAnalyzer:
 
         for name, stats in sorted_operators:
             ws1.cell(row=row, column=1, value=name)
-            ws1.cell(row=row, column=2, value=stats['category'])
+            cat_cell = ws1.cell(row=row, column=2, value=stats['category'])
+            self._apply_category_color(cat_cell, stats['category'])
             ws1.cell(row=row, column=3, value=stats['count'])
             ws1.cell(row=row, column=4, value=round(stats['total_dur'], 2))
             ws1.cell(row=row, column=5, value=round(stats['avg_dur'], 2))
             ws1.cell(row=row, column=6, value=round(stats['relative_pct'], 2))
-            # 绝对占比（相对于总时间）
-            absolute_pct = (stats['total_dur'] / total_dur * 100) if total_dur > 0 else 0
+            # 绝对占比（相对于GPU trace总时长，含空泡）
+            absolute_pct = (stats['total_dur'] / gpu_total_dur * 100) if gpu_total_dur > 0 else 0
             ws1.cell(row=row, column=7, value=round(absolute_pct, 2))
             row += 1
 
@@ -212,10 +255,7 @@ class ProfAnalyzer:
 
         # 表头
         headers2 = ['分类', '算子种类数', '调用次数', '总耗时(us)', '总耗时(ms)', '相对占比(%)', '绝对占比(%)']
-        for col, header in enumerate(headers2, 1):
-            cell = ws2.cell(row=1, column=col, value=header)
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal='center')
+        self._apply_header_style(ws2, headers2)
 
         # 数据
         row = 2
@@ -224,15 +264,30 @@ class ProfAnalyzer:
                                    key=lambda x: x[1]['total_dur'], reverse=True)
 
         for category, stats in sorted_categories:
-            ws2.cell(row=row, column=1, value=category)
+            cat_cell = ws2.cell(row=row, column=1, value=category)
+            self._apply_category_color(cat_cell, category)
             ws2.cell(row=row, column=2, value=len(stats['operator_types']))
             ws2.cell(row=row, column=3, value=stats['count'])
             ws2.cell(row=row, column=4, value=round(stats['total_dur'], 2))
             ws2.cell(row=row, column=5, value=round(stats['total_dur'] / 1000, 2))  # 转换为ms
             ws2.cell(row=row, column=6, value=round(stats['relative_pct'], 2))
-            # 绝对占比
-            absolute_pct = (stats['total_dur'] / total_dur * 100) if total_dur > 0 else 0
+            # 绝对占比（相对于GPU trace总时长，含空泡）
+            absolute_pct = (stats['total_dur'] / gpu_total_dur * 100) if gpu_total_dur > 0 else 0
             ws2.cell(row=row, column=7, value=round(absolute_pct, 2))
+            row += 1
+
+        # 添加空泡行
+        bubble_dur = gpu_total_dur - total_dur
+        if bubble_dur > 0:
+            cat_cell = ws2.cell(row=row, column=1, value='空泡 (bubble)')
+            self._apply_category_color(cat_cell, '空泡 (bubble)')
+            ws2.cell(row=row, column=2, value=0)
+            ws2.cell(row=row, column=3, value=0)
+            ws2.cell(row=row, column=4, value=round(bubble_dur, 2))
+            ws2.cell(row=row, column=5, value=round(bubble_dur / 1000, 2))
+            ws2.cell(row=row, column=6, value='—')
+            bubble_pct = (bubble_dur / gpu_total_dur * 100) if gpu_total_dur > 0 else 0
+            ws2.cell(row=row, column=7, value=round(bubble_pct, 2))
             row += 1
 
         # 添加总计行
@@ -245,13 +300,13 @@ class ProfAnalyzer:
 
         ws2.cell(row=row, column=2, value=total_operator_types)
         ws2.cell(row=row, column=3, value=total_count)
-        ws2.cell(row=row, column=4, value=round(total_dur, 2))
-        ws2.cell(row=row, column=5, value=round(total_dur / 1000, 2))
+        ws2.cell(row=row, column=4, value=round(gpu_total_dur, 2))
+        ws2.cell(row=row, column=5, value=round(gpu_total_dur / 1000, 2))
         ws2.cell(row=row, column=6, value=100)
         ws2.cell(row=row, column=7, value=100)
 
         # 设置列宽
-        ws2.column_dimensions['A'].width = 15
+        ws2.column_dimensions['A'].width = 18
         ws2.column_dimensions['B'].width = 12
         ws2.column_dimensions['C'].width = 10
         ws2.column_dimensions['D'].width = 15
@@ -263,13 +318,17 @@ class ProfAnalyzer:
         wb.save(output_path)
         print(f"报告已保存到: {output_path}")
 
-    def print_summary(self, operator_stats: Dict, category_stats: Dict, total_dur: float):
+    def print_summary(self, operator_stats: Dict, category_stats: Dict,
+                      total_dur: float, gpu_total_dur: float):
         """打印摘要信息"""
         print("\n" + "="*60)
         print("性能分析摘要")
         print("="*60)
 
-        print(f"\n总耗时: {total_dur:.2f} us ({total_dur/1000:.2f} ms)")
+        bubble_dur = gpu_total_dur - total_dur
+        print(f"\nGPU trace总时长: {gpu_total_dur:.2f} us ({gpu_total_dur/1000:.2f} ms)")
+        print(f"Kernel总耗时: {total_dur:.2f} us ({total_dur/1000:.2f} ms)")
+        print(f"空泡 (bubble): {bubble_dur:.2f} us ({bubble_dur/1000:.2f} ms)")
         print(f"算子种类数: {len(operator_stats)}")
         print(f"总调用次数: {sum(s['count'] for s in operator_stats.values())}")
 
@@ -282,6 +341,11 @@ class ProfAnalyzer:
             pct = (stats['total_dur'] / total_dur * 100) if total_dur > 0 else 0
             print(f"{category:15} | {len(stats['operator_types']):3}种算子 | "
                   f"{stats['count']:6}次调用 | {stats['total_dur']:12.2f} us | {pct:5.2f}%")
+
+        if bubble_dur > 0:
+            bubble_pct = (bubble_dur / gpu_total_dur * 100) if gpu_total_dur > 0 else 0
+            print(f"{'空泡 (bubble)':15} | {'—':>3}        | "
+                  f"{'—':>6}       | {bubble_dur:12.2f} us | {bubble_pct:5.2f}%")
 
         print("\nTop 10 算子 (按耗时降序):")
         print("-"*60)
@@ -359,20 +423,20 @@ class ProfAnalyzer:
 
         # 分析事件
         print("分析算子数据...")
-        operator_stats, category_stats, total_dur = self.analyze_events(events)
+        operator_stats, category_stats, total_dur, gpu_total_dur = self.analyze_events(events)
 
         # 计算百分比
         self.calculate_percentages(operator_stats, category_stats, total_dur)
 
         # 打印摘要
-        self.print_summary(operator_stats, category_stats, total_dur)
+        self.print_summary(operator_stats, category_stats, total_dur, gpu_total_dur)
 
         # 生成优化建议
         self.generate_optimization_suggestions(category_stats, total_dur)
 
         # 创建Excel报告
         print("\n生成Excel报告...")
-        self.create_excel_report(operator_stats, category_stats, total_dur, output_path)
+        self.create_excel_report(operator_stats, category_stats, total_dur, gpu_total_dur, output_path)
 
         print("\n分析完成！")
 
