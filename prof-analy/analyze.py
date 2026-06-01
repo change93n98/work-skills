@@ -44,12 +44,12 @@ class ProfAnalyzer:
                           'sqrt', 'exp', 'log', 'neg', 'reciprocal', 'elementwise',
                           'vectorized_elementwise', 'FillFunctor', 'CUDAFunctor'],
             '访存': ['memcpy', 'MemCpy', 'cudaMemcpy', 'mem_set', 'memset', 'MemcpyAsync'],
-            'reduction': ['sum', 'mean', 'max', 'min', 'prod', 'argmax', 'argmin',
-                         'ReduceKernel', 'ReduceOp'],
-            'index': ['index', 'gather', 'scatter', 'slice', 'select', 'embedding',
-                     'vectorized_gather', 'indexSelectLargeIndex'],
-            'shape': ['reshape', 'view', 'permute', 'transpose', 'contiguous', 'clone',
-                     'CopyKernel', 'bfloat16_copy']
+            'at::native': ['sum', 'mean', 'max', 'min', 'prod', 'argmax', 'argmin',
+                          'ReduceKernel', 'ReduceOp',
+                          'index', 'gather', 'scatter', 'slice', 'select', 'embedding',
+                          'vectorized_gather', 'indexSelectLargeIndex',
+                          'reshape', 'view', 'permute', 'transpose', 'contiguous', 'clone',
+                          'CopyKernel', 'bfloat16_copy']
         }
 
     def load_trace(self, file_path: str) -> Dict:
@@ -90,7 +90,7 @@ class ProfAnalyzer:
             elif any(x in name_lower for x in ['elementwise', 'ew']):
                 return 'elementwise'
 
-        return '其他'
+        return 'at::native'
 
     def analyze_events(self, events: List[Dict]) -> Tuple[Dict, Dict]:
         """分析事件数据，只关注GPU kernel事件"""

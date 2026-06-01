@@ -79,9 +79,7 @@ python analyze.py /path/to/trace.json.gz
 | gemm | Cijk, gemm, matmul, bmm, linear, cublasLt, cublas |
 | elementwise | add, mul, sub, div, relu, gelu, silu, sigmoid, tanh, softmax, elementwise |
 | 访存 | memcpy, MemCpy, cudaMemcpy, mem_set, memset |
-| reduction | sum, mean, max, min, prod, argmax, argmin |
-| index | index, gather, scatter, slice, select, embedding |
-| shape | reshape, view, permute, transpose, contiguous, clone |
+| at::native | sum, mean, max, min, gather, reshape, permute, contiguous, clone, CopyKernel 等（reduction/index/shape/其他统一归类） |
 
 ## 示例
 
