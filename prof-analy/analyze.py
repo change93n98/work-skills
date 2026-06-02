@@ -29,6 +29,7 @@ CATEGORY_COLORS = {
     'conv_bn': '00B4C6E7',     # 浅蓝
     'norm': '00DDA0DD',        # 紫红
     'elementwise': '00F0E68C', # 卡其色
+    'triton': '00FFC0CB',      # 粉红
     '访存': '00FFA07A',        # 浅橙
     'at::native': '00F5F5F5',  # 浅灰
     '空泡 (bubble)': '00D9D9D9', # 灰色
@@ -82,6 +83,10 @@ class ProfAnalyzer:
     def classify_operator(self, name: str) -> str:
         """对算子进行分类"""
         name_lower = name.lower()
+
+        # triton融合kernel优先识别
+        if name_lower.startswith('triton_'):
+            return 'triton'
 
         # 按优先级检查分类规则
         for category, keywords in self.category_rules.items():
