@@ -288,7 +288,6 @@ class ProfAnalyzer:
             row += 1
 
         # 总计行
-        row += 1
         total_cell = ws2.cell(row=row, column=1, value='TOTAL')
         total_cell.font = Font(bold=True)
         ws2.cell(row=row, column=2, value=sum(len(s['operator_types']) for s in category_stats.values()))
