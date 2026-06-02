@@ -1,6 +1,6 @@
 # Work Skills
 
-Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU 性能分析工具。包含三个独立 skill：BLAS GEMM 性能对比、大模型推理 Profiling 分析和模型性能分析。
+Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU 性能分析工具。包含四个独立 skill：BLAS GEMM 性能对比、大模型推理 Profiling 分析、模型性能分析和 SSH Docker 远程工作流。
 
 ## 目录
 
@@ -8,6 +8,7 @@ Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU
 - [Skill 1: blas-compare](#skill-1-blas-compare---gemm-性能对比)
 - [Skill 2: llm-prof](#skill-2-llm-prof---大模型推理-profiling-分析)
 - [Skill 3: prof-analy](#skill-3-prof-analy---模型性能分析)
+- [Skill 4: ssh-docker](#skill-4-ssh-docker---远程-ssh-docker-工作流)
 - [项目结构](#项目结构)
 - [依赖](#依赖)
 
@@ -21,6 +22,7 @@ Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU
 cp -r blas-compare ~/.claude/skills/
 cp -r llm-prof ~/.claude/skills/
 cp -r prof-analy ~/.claude/skills/
+cp -r ssh-docker ~/.claude/skills/
 ```
 
 安装后在 Claude Code 对话中触发对应关键词即可调用。
@@ -182,6 +184,59 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 
 ---
 
+## Skill 4: ssh-docker - 远程 SSH Docker 工作流
+
+### 功能
+
+通过 SSH + Docker exec 在远程容器中执行编译、测试、调试任务。支持从 `~/.ssh/config` 解析节点配置，自动同步本地代码到远程，适用于 GPU 服务器开发场景。
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| 节点自动识别 | 支持输入 hostname alias（从 `~/.ssh/config` 解析）或直接 IP |
+| 容器交互 | 通过 `docker exec` 在目标容器内执行命令 |
+| 文件同步 | 基于 SFTP 自动同步本地代码到远程服务器 |
+| GPU 感知 | 自动检测 GPU 状态、内存使用，支持设备绑定 |
+| 权限处理 | 自动修复容器输出文件的所有权问题 |
+
+### 触发词
+
+`ssh-docker`、`远程执行`、`docker exec`、`远程调试`、`GPU开发`
+
+### 输入
+
+调用时交互式询问：
+1. **目标节点**：hostname alias 或 IP 地址
+2. **Docker 容器名**：目标容器名称
+3. **工作区路径**（可选）：主机和容器的挂载路径
+
+### 典型使用流程
+
+```powershell
+# 1. 触发 skill
+/ssh-docker
+
+# 2. 交互输入
+# 节点: gpu-server1  (或 10.17.176.13)
+# 容器: megamoe
+
+# 3. 自动执行
+# - 解析 SSH 配置
+# - 验证连接和容器状态
+# - 同步代码
+# - 在容器内执行任务
+```
+
+### 输出
+
+- SSH 连接验证结果
+- 容器状态和 GPU 信息
+- 远程命令执行结果
+- 同步状态报告
+
+---
+
 ## 项目结构
 
 ```
@@ -197,13 +252,15 @@ work-skills/
 │   ├── run_profiling.py
 │   ├── generate_report.py
 │   └── ...
-└── prof-analy/            # 模型性能分析 skill
-    ├── skill.md           # Skill 定义文件
-    ├── analyze.py         # 核心分析脚本
-    ├── README.md          # 详细说明文档
-    ├── QUICKSTART.md      # 快速开始指南
-    ├── example.py         # 使用示例
-    └── test_prof_analy.py # 测试脚本
+├── prof-analy/            # 模型性能分析 skill
+│   ├── skill.md           # Skill 定义文件
+│   ├── analyze.py         # 核心分析脚本
+│   ├── README.md          # 详细说明文档
+│   ├── QUICKSTART.md      # 快速开始指南
+│   ├── example.py         # 使用示例
+│   └── test_prof_analy.py # 测试脚本
+└── ssh-docker/            # SSH Docker 远程工作流 skill
+    └── SKILL.md           # Skill 定义文件
 ```
 
 ## 依赖
@@ -219,6 +276,11 @@ pip install openpyxl
 ```bash
 pip install torch transformers vllm
 ```
+
+### ssh-docker 依赖
+
+- Windows: OpenSSH 客户端
+- 远程节点: Docker, SSH 服务
 
 ---
 
