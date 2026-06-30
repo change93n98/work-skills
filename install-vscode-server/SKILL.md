@@ -1,11 +1,11 @@
 ---
 name: install-vscode-server
-description: 在远程容器/服务器内通过 code tunnel 快速安装 VS Code Server，解决 VS Code Remote 连接时自动下载慢的问题
+description: 在远程容器/服务器内快速安装 VS Code Server，解决 VS Code Remote 连接时自动下载慢的问题
 ---
 
-# Install VS Code Server（via code tunnel）
+# Install VS Code Server
 
-在远程容器或服务器内通过 `code tunnel` 快速安装 VS Code Server，无需获取本地 commit 版本，一次创建，不同版本自动复用。
+在远程容器或服务器内快速安装 VS Code Server，替代 VS Code Remote 连接时的慢速自动下载。
 
 ## 使用场景
 
@@ -20,76 +20,92 @@ description: 在远程容器/服务器内通过 code tunnel 快速安装 VS Code
 
 从用户的 SSH config（`~/.ssh/config`）中获取连接方式，或从用户提供的容器/Docker 信息中获取。
 
-### Step 2: 在远程机器上执行 code tunnel
+### Step 2: 获取本地 VS Code commit hash
 
-**无需获取本地 VS Code 版本和 commit hash**，直接在远程机器上运行 `code tunnel`，它会自动下载与本地 VS Code 匹配的 server。
-
-#### 对于 SSH 主机：
-
-```bash
-# 1. 先将 code CLI 传到远程（如果远程没有）
-# 检查远程是否已有 code
-ssh <host> "which code || test -f ~/.vscode-cli/code"
-
-# 如果没有，下载并安装 code CLI
-ssh <host> 'curl -fsSL "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64" | tar xz -C /tmp && mv /tmp/code ~/.vscode-cli/code && chmod +x ~/.vscode-cli/code'
-
-# 2. 运行 code tunnel（首次运行会提示登录或使用 token）
-ssh <host> "~/.vscode-cli/code tunnel --accept-server-license-terms"
+在本地运行 `code --version`，取第二行作为 COMMIT hash。例如：
+```
+1.126.0
+7e7950df89d055b5a378379db9ee14290772148a   ← 这就是 COMMIT
+x64
 ```
 
-#### 对于 Docker 容器：
+### Step 3: 在远程机器上安装 VS Code Server
+
+将以下脚本发送到远程机器执行，**自动清理残留目录**（VS Code 下载超时会留下空的带时间戳目录）：
 
 ```bash
-# 1. 将 code CLI 拷贝到容器内
-# 方法A: 从宿主机拷贝（如果宿主机有 code）
-docker cp $(which code) <container>:/usr/local/bin/code
+#!/bin/bash
+set -e
 
-# 方法B: 在容器内下载
-docker exec <container> bash -c '
-  curl -fsSL "https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64" \
-  | tar xz -C /tmp && mv /tmp/code /usr/local/bin/code && chmod +x /usr/local/bin/code
-'
+COMMIT="{{COMMIT_HASH}}"  # 替换为实际 commit hash
 
-# 2. 在容器内运行 code tunnel
-docker exec -it <container> code tunnel --accept-server-license-terms
-```
-
-### Step 3: 首次运行认证
-
-首次运行 `code tunnel` 时需要认证：
-
-1. 终端会显示一个 URL 和 device code
-2. 在本地浏览器中打开该 URL，输入 device code 完成认证
-3. 认证成功后 tunnel 建立，可以通过 vscode.dev 或本地 VS Code 连接
-
-### Step 4: 连接
-
-- **方式一**：通过 vscode.dev 连接 — 打开 `https://vscode.dev/tunnel/<tunnel-name>`
-- **方式二**：在本地 VS Code 中使用 Command Palette → `Remote-Tunnels: Connect to Tunnel`
-
-### 加速下载备选方案
-
-如果 `code tunnel` 下载 vscode-server 仍然很慢，可以手动预下载：
-
-```bash
-# 获取需要的版本信息（在远程机器上运行）
+# 检测架构
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64)  ARCH="x64" ;;
     aarch64) ARCH="arm64" ;;
+    armv7l)  ARCH="armhf" ;;
+    *)       echo "[ERROR] 不支持的架构: $ARCH"; exit 1 ;;
 esac
 
-# 手动下载 vscode-server tar.gz 到 ~/.vscode-server/bin/<commit>/
-# commit hash 从 code tunnel 的日志输出中获取
-mkdir -p ~/.vscode-server/bin/<COMMIT>
-curl -fSL "https://vscode.cdn.azure.cn/stable/<COMMIT>/vscode-server-linux-${ARCH}.tar.gz" \
-  | tar xz --strip-components=1 -C ~/.vscode-server/bin/<COMMIT>/
+INSTALL_DIR="$HOME/.vscode-server/bin/${COMMIT}"
+
+# 检查标准目录是否已存在且有内容
+if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/bin/code-server" ]; then
+    echo "[OK] VS Code Server 已安装: $INSTALL_DIR"
+    exit 0
+fi
+
+# 清理残留的带时间戳空目录（VS Code 下载超时留下的）
+echo "[1/4] 清理残留目录..."
+rm -rf "$HOME/.vscode-server/bin/${COMMIT}"_*
+
+# 创建标准目录
+mkdir -p "$INSTALL_DIR"
+
+# 下载
+echo "[2/4] 下载 vscode-server (commit: $COMMIT, arch: $ARCH)..."
+curl -fSL --connect-timeout 15 --max-time 600 \
+  "https://update.code.visualstudio.com/commit:${COMMIT}/server-linux-${ARCH}/stable" \
+  -o /tmp/vscode-server.tar.gz
+
+# 解压
+echo "[3/4] 解压中..."
+tar -xzf /tmp/vscode-server.tar.gz --strip-components=1 -C "$INSTALL_DIR"
+rm -f /tmp/vscode-server.tar.gz
+
+# 验证
+echo "[4/4] 验证安装..."
+if [ -f "$INSTALL_DIR/bin/code-server" ]; then
+    echo "[OK] VS Code Server 安装成功！"
+    echo "     路径: $INSTALL_DIR"
+    ls "$INSTALL_DIR/bin/"
+else
+    echo "[ERROR] 安装失败"
+    exit 1
+fi
 ```
+
+### Step 4: 执行流程
+
+对于用户给的 SSH host 或容器：
+
+1. **获取本地 commit hash**：`code --version` 取第二行
+2. **替换脚本中的 `{{COMMIT_HASH}}`**
+3. **通过 SSH 执行脚本**：
+   - SSH 主机: `ssh <host> 'bash -s' < script.sh`
+   - Docker 容器: `docker exec -i <container> bash < script.sh`
+4. **确认安装成功后，用户重新用 VS Code 连接即可秒连**
+
+### 加速下载备选方案
+
+如果官方源下载慢，可以用国内镜像替换 curl 的 URL：
+- Azure CDN: `https://vscode.cdn.azure.cn/stable/${COMMIT}/vscode-server-linux-${ARCH}.tar.gz`
+- npmmirror: `https://npmmirror.com/mirrors/vscode-server/${COMMIT}/vscode-server-linux-${ARCH}.tar.gz`
 
 ### 注意事项
 
-- `code tunnel` 会自动处理版本匹配，**不需要**手动获取本地 VS Code 的 commit hash
-- 首次认证后会保存凭据，后续连接无需重复认证
-- 如果 VS Code 更新了版本，`code tunnel` 会自动更新 server
-- 对于没有网络访问权限的离线环境，需要手动下载 vscode-server tar.gz 并放到 `~/.vscode-server/bin/<commit>/` 目录
+- **自动清理残留**：VS Code 连接超时会留下带时间戳的空目录（如 `commit_1782790979867`），脚本会自动清理
+- 安装后 VS Code Remote 连接时会检测到已安装的 server，跳过下载
+- 如果 VS Code 更新了版本，需要重新执行此 skill 更新 server
+- 对于 Docker 容器，确保宿主机能访问 `update.code.visualstudio.com`
