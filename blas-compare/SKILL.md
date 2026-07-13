@@ -18,8 +18,9 @@ description: >
 | 容器名称 | Docker 容器名或 ID | ch_vllm018_0707 |
 | 输入文件路径（容器内） | 包含 rocblas-bench 命令的文件（rocblas-layer3 格式） | /home/auto_select_test/commands.log |
 | 优化配置目录（容器内） | 用于设置 ROCBLAS_TENSILE_LIBPATH 的目录 | /home/auto_select_test/auto_select_tools/optimization_configs/new/config/library_gpu5 |
+| 输出目录（宿主机） | 存放脚本、日志和结果的目录 | /root/changhl |
 
-> 输出目录自动设为输入文件所在目录。
+> 输出目录为宿主机上的目录，默认为脚本所在目录。
 > GPU 编号不需要用户指定，脚本会自动查找空闲卡。
 
 ## 输入文件格式
@@ -120,8 +121,8 @@ INPUT_FILE="<输入文件路径（容器内）>"
 OPT_CONFIG_DIR="<优化配置目录（容器内）>"
 BENCH_BIN="/opt/dtk/lib/rocblas/benchmark_tool/rocblas-bench"
 
-# 输出目录 = 宿主机当前目录
-OUT_DIR="/root/changhl"
+# 输出目录 = 用户指定的宿主机目录
+OUT_DIR="<输出目录（宿主机）>"
 LOG_BASE="${OUT_DIR}/logs"
 RESULT_FILE="${OUT_DIR}/results.csv"
 BASELINE_RESULT_FILE="${OUT_DIR}/baseline_results.csv"
@@ -365,14 +366,15 @@ echo "Phase 5: 合并结果"
 echo "=========================================="
 
 # 使用 Python 合并结果
-python3 << 'PYTHON_EOF'
+python3 << PYTHON_EOF
 import csv
 
-BASELINE_FILE = '/root/changhl/baseline_results.csv'
-OPTIMIZED_FILE = '/root/changhl/optimized_results.csv'
-BASELINE_KERNEL_FILE = '/root/changhl/baseline_kernel.csv'
-OPTIMIZED_KERNEL_FILE = '/root/changhl/optimized_kernel.csv'
-RESULT_FILE = '/root/changhl/results.csv'
+
+BASELINE_FILE = '${OUT_DIR}/baseline_results.csv'
+OPTIMIZED_FILE = '${OUT_DIR}/optimized_results.csv'
+BASELINE_KERNEL_FILE = '${OUT_DIR}/baseline_kernel.csv'
+OPTIMIZED_KERNEL_FILE = '${OUT_DIR}/optimized_kernel.csv'
+RESULT_FILE = '${OUT_DIR}/results.csv'
 
 # 读取基线结果
 baseline_data = {}
@@ -462,8 +464,9 @@ echo "Done! Results: ${RESULT_FILE}"
 python3 -c "
 import csv
 
-RESULT_FILE = '/root/changhl/results.csv'
-TABLE_FILE = '/root/changhl/comparison_table.md'
+
+RESULT_FILE = '${OUT_DIR}/results.csv'
+TABLE_FILE = '${OUT_DIR}/comparison_table.md'
 
 with open(RESULT_FILE, 'r') as f:
     rows = list(csv.DictReader(f))
