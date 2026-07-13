@@ -45,12 +45,10 @@ rocblas-layer3 格式，每行包含一条 rocblas-bench 命令，示例：
 ├── results.csv             # 汇总结果（含所有参数和性能数据）
 ├── comparison_table.md     # Markdown 对比表格
 └── logs/
-    ├── baseline/           # 基线执行日志
-    │   ├── line_1_m8192_n1_k7392.log
-    │   └── ...
-    └── optimized/          # 优化后执行日志
-        ├── line_1_m8192_n1_k7392.log
-        └── ...
+    ├── baseline/           # 基线性能测试日志（不加 TENSILE_DB）
+    ├── optimized/          # 优化后性能测试日志（不加 TENSILE_DB）
+    ├── baseline_kernel/    # 基线 kernel 名称提取日志（加 TENSILE_DB）
+    └── optimized_kernel/   # 优化后 kernel 名称提取日志（加 TENSILE_DB）
 ```
 
 ## Step 0: 确认环境
@@ -89,7 +87,7 @@ HCU     Temp     AvgPwr     VRAM%      HCU%
 6       41.0C    160.0W     91%        0.0%     ← 显存占用，不可用
 ```
 
-选取第一张 VRAM% 和 HCU% 都为 0 的卡，记录 GPU 编号备用。
+**选取所有 VRAM% 和 HCU% 都为 0 的卡**，用逗号分隔记录 GPU 编号备用（如 "0,1"）。
 
 ### 0.5 检查 benchmark 可执行文件
 
@@ -104,7 +102,14 @@ docker exec <容器名称> chmod +x /opt/dtk/lib/rocblas/benchmark_tool/rocblas-
 
 ## Step 1: 创建执行脚本
 
-根据收集的参数，在宿主机上创建脚本，通过 `docker exec` 在容器内执行：
+根据收集的参数，在宿主机上创建脚本，通过 `docker exec` 在容器内执行。
+
+**重要**：
+1. 必须先跑全量的非优化测试，跑完之后再跑全量的优化测试（而不是每组都先跑优化和非优化）
+2. 运行命令按照输入文件中的原始命令，直接使用，不要修改命令格式（不要改变 `-f gemm_ex` 为 `-f gemm` 等）
+3. **性能测试时不设置 `TENSILE_DB`**（避免影响性能），设置 `HIP_VISIBLE_DEVICES`（确保使用正确的 GPU）
+4. **性能测试完成后，再单独运行一次设置 `TENSILE_DB=0x8000` 的测试**，用于提取 kernel 名称
+5. 所有 rocblas 输出日志都要保存
 
 ```bash
 #!/bin/bash
@@ -115,34 +120,53 @@ INPUT_FILE="<输入文件路径（容器内）>"
 OPT_CONFIG_DIR="<优化配置目录（容器内）>"
 BENCH_BIN="/opt/dtk/lib/rocblas/benchmark_tool/rocblas-bench"
 
-# 输出目录 = 输入文件所在目录
-OUT_DIR=$(dirname "${INPUT_FILE}")
+# 输出目录 = 宿主机当前目录
+OUT_DIR="/root/changhl"
 LOG_BASE="${OUT_DIR}/logs"
 RESULT_FILE="${OUT_DIR}/results.csv"
+BASELINE_RESULT_FILE="${OUT_DIR}/baseline_results.csv"
+OPTIMIZED_RESULT_FILE="${OUT_DIR}/optimized_results.csv"
 
-# 自动查找空闲卡（VRAM% 和 HCU% 都为 0）
-GPU_ID=$(docker exec ${CONTAINER} hy-smi | awk 'NR>1 && $6=="0%" && $7=="0.0%" {print $1; exit}')
-if [[ -z "$GPU_ID" ]]; then
+# 自动查找所有空闲卡（VRAM% 和 HCU% 都为 0），用逗号分隔
+GPU_IDS=$(docker exec ${CONTAINER} hy-smi | awk 'NR>1 && $6=="0%" && $7=="0.0%" {if(count>0) printf ","; printf "%s", $1; count++} END{print ""}')
+if [[ -z "$GPU_IDS" ]]; then
     echo "ERROR: 没有找到空闲GPU，请检查 hy-smi 输出"
     exit 1
 fi
-echo "使用 GPU: $GPU_ID"
+echo "使用 GPU: $GPU_IDS"
 
-# 在容器内创建日志目录
-docker exec ${CONTAINER} mkdir -p "${LOG_BASE}/baseline" "${LOG_BASE}/optimized"
+# 在宿主机创建日志目录
+mkdir -p "${LOG_BASE}/baseline" "${LOG_BASE}/optimized"
+mkdir -p "${LOG_BASE}/baseline_kernel" "${LOG_BASE}/optimized_kernel"
 
-# CSV header（含 kernel 列）
-echo "line,m,n,k,transA,transB,alpha,beta,lda,ldb,ldc,ldd,a_type,b_type,c_type,d_type,compute_type,baseline_kernel,baseline_gflops,baseline_us,optimized_kernel,optimized_gflops,optimized_us,gflops_pct,us_pct" > "${RESULT_FILE}"
+# CSV header
+BASELINE_HEADER="line,m,n,k,transA,transB,alpha,beta,lda,ldb,ldc,ldd,a_type,b_type,c_type,d_type,compute_type,baseline_kernel,baseline_gflops,baseline_us"
+OPTIMIZED_HEADER="line,optimized_kernel,optimized_gflops,optimized_us"
+FINAL_HEADER="line,m,n,k,transA,transB,alpha,beta,lda,ldb,ldc,ldd,a_type,b_type,c_type,d_type,compute_type,baseline_kernel,baseline_gflops,baseline_us,optimized_kernel,optimized_gflops,optimized_us,gflops_pct,us_pct"
 
-LINE_NUM=0
-while IFS= read -r raw_line; do
-    [[ -z "${raw_line// /}" ]] && continue
-    LINE_NUM=$((LINE_NUM + 1))
+echo "$BASELINE_HEADER" > "${BASELINE_RESULT_FILE}"
+echo "$OPTIMIZED_HEADER" > "${OPTIMIZED_RESULT_FILE}"
+echo "$FINAL_HEADER" > "${RESULT_FILE}"
 
-    # 提取命令部分（跳过开头的次数，如果有）
-    cmd=$(echo "$raw_line" | sed 's/^[[:space:]]*[0-9]*[[:space:]]*//')
+TOTAL_LINES=$(docker exec ${CONTAINER} wc -l "${INPUT_FILE}" | awk '{print $1}')
+echo "总共 ${TOTAL_LINES} 条命令"
 
-    # 解析参数
+# 提取 kernel 名称的函数
+extract_kernel() {
+    local output="$1"
+    local kernel=$(echo "$output" | grep -oP 'Solution::\K\S+' | tail -1)
+    if [[ -z "$kernel" ]]; then
+        kernel=$(echo "$output" | grep -oP '\bCijk\S*|\bCij\S*' | tail -1)
+    fi
+    if [[ -z "$kernel" ]]; then
+        kernel="N/A"
+    fi
+    echo "$kernel"
+}
+
+# 解析参数的函数
+parse_params() {
+    local cmd="$1"
     m=$(echo "$cmd" | grep -oP '(?<=-m )\S+')
     n=$(echo "$cmd" | grep -oP '(?<=-n )\S+')
     k=$(echo "$cmd" | grep -oP '(?<=-k )\S+')
@@ -159,32 +183,35 @@ while IFS= read -r raw_line; do
     c_type=$(echo "$cmd" | grep -oP '(?<=--c_type )\S+')
     d_type=$(echo "$cmd" | grep -oP '(?<=--d_type )\S+')
     compute_type=$(echo "$cmd" | grep -oP '(?<=--compute_type )\S+')
+}
 
-    echo "[${LINE_NUM}] m=${m} n=${n} k=${k} transA=${transA} transB=${transB}"
+# ============================================
+# Phase 1: 全量非优化性能测试（不设置 TENSILE_DB）
+# ============================================
+echo "=========================================="
+echo "Phase 1: 全量非优化性能测试（基线）"
+echo "=========================================="
+
+LINE_NUM=0
+while IFS= read -r raw_line; do
+    [[ -z "${raw_line// /}" ]] && continue
+    LINE_NUM=$((LINE_NUM + 1))
+
+    # 提取命令部分（跳过开头的次数，如果有）
+    cmd=$(echo "$raw_line" | sed 's/^[[:space:]]*[0-9]*[[:space:]]*//')
+
+    # 解析参数
+    parse_params "$cmd"
+
+    echo "[${LINE_NUM}/${TOTAL_LINES}] 基线性能 m=${m} n=${n} k=${k} transA=${transA} transB=${transB}"
 
     # 替换 ./rocblas-bench 为完整路径
     full_cmd=$(echo "$cmd" | sed "s|./rocblas-bench|${BENCH_BIN}|g")
 
-    # 提取 kernel 名称的函数（从 TENSILE_DB 调试输出中解析）
-    extract_kernel() {
-        local output="$1"
-        # 优先匹配 Tensile Solution 名称（如 Cijk_Ailk_Bjlk_BH_...）
-        local kernel=$(echo "$output" | grep -oP 'Solution::\K\S+' | tail -1)
-        if [[ -z "$kernel" ]]; then
-            # 回退：匹配包含 Cijk/Cij 的行中的完整 kernel 标识
-            kernel=$(echo "$output" | grep -oP '\bCijk\S*|\bCij\S*' | tail -1)
-        fi
-        if [[ -z "$kernel" ]]; then
-            kernel="N/A"
-        fi
-        echo "$kernel"
-    }
-
-    # 基线运行（不设置 ROCBLAS_TENSILE_LIBPATH）
+    # 基线性能运行（不设置 ROCBLAS_TENSILE_LIBPATH，不设置 TENSILE_DB，设置 HIP_VISIBLE_DEVICES）
     baseline_log="${LOG_BASE}/baseline/line_${LINE_NUM}_m${m}_n${n}_k${k}.log"
-    baseline_output=$(docker exec -e HIP_VISIBLE_DEVICES=$GPU_ID -e TENSILE_DB=0x8000 ${CONTAINER} timeout 300 ${full_cmd} 2>&1) || true
+    baseline_output=$(docker exec -e HIP_VISIBLE_DEVICES=$GPU_IDS ${CONTAINER} timeout 300 ${full_cmd} 2>&1) || true
     echo "$baseline_output" > "${baseline_log}"
-    baseline_kernel=$(extract_kernel "$baseline_output")
     baseline_result=$(echo "$baseline_output" | grep -E '^N,|^T,' | tail -1 || echo "")
     if [[ -n "$baseline_result" ]]; then
         baseline_gflops=$(echo "$baseline_result" | awk -F',' '{print $(NF-1)}' | tr -d ' ')
@@ -193,11 +220,43 @@ while IFS= read -r raw_line; do
         baseline_gflops="N/A"; baseline_us="N/A"
     fi
 
-    # 优化后运行（设置 ROCBLAS_TENSILE_LIBPATH 指向优化配置目录）
+    echo "  baseline=${baseline_gflops}GFLOPS/${baseline_us}us"
+
+    # 暂时写入 baseline_kernel 为 N/A，后面会补充
+    echo "${LINE_NUM},${m},${n},${k},${transA},${transB},${alpha},${beta},${lda},${ldb},${ldc},${ldd},${a_type},${b_type},${c_type},${d_type},${compute_type},N/A,${baseline_gflops},${baseline_us}" >> "${BASELINE_RESULT_FILE}"
+done < <(docker exec ${CONTAINER} cat "${INPUT_FILE}")
+
+echo ""
+echo "Phase 1 完成！"
+echo ""
+
+# ============================================
+# Phase 2: 全量优化性能测试（不设置 TENSILE_DB）
+# ============================================
+echo "=========================================="
+echo "Phase 2: 全量优化性能测试"
+echo "=========================================="
+
+LINE_NUM=0
+while IFS= read -r raw_line; do
+    [[ -z "${raw_line// /}" ]] && continue
+    LINE_NUM=$((LINE_NUM + 1))
+
+    # 提取命令部分
+    cmd=$(echo "$raw_line" | sed 's/^[[:space:]]*[0-9]*[[:space:]]*//')
+
+    # 解析参数
+    parse_params "$cmd"
+
+    echo "[${LINE_NUM}/${TOTAL_LINES}] 优化性能 m=${m} n=${n} k=${k} transA=${transA} transB=${transB}"
+
+    # 替换 ./rocblas-bench 为完整路径
+    full_cmd=$(echo "$cmd" | sed "s|./rocblas-bench|${BENCH_BIN}|g")
+
+    # 优化后性能运行（设置 ROCBLAS_TENSILE_LIBPATH，不设置 TENSILE_DB，设置 HIP_VISIBLE_DEVICES）
     optimized_log="${LOG_BASE}/optimized/line_${LINE_NUM}_m${m}_n${n}_k${k}.log"
-    optimized_output=$(docker exec -e HIP_VISIBLE_DEVICES=$GPU_ID -e TENSILE_DB=0x8000 -e ROCBLAS_TENSILE_LIBPATH=${OPT_CONFIG_DIR} ${CONTAINER} timeout 300 ${full_cmd} 2>&1) || true
+    optimized_output=$(docker exec -e HIP_VISIBLE_DEVICES=$GPU_IDS -e ROCBLAS_TENSILE_LIBPATH=${OPT_CONFIG_DIR} ${CONTAINER} timeout 300 ${full_cmd} 2>&1) || true
     echo "$optimized_output" > "${optimized_log}"
-    optimized_kernel=$(extract_kernel "$optimized_output")
     optimized_result=$(echo "$optimized_output" | grep -E '^N,|^T,' | tail -1 || echo "")
     if [[ -n "$optimized_result" ]]; then
         optimized_gflops=$(echo "$optimized_result" | awk -F',' '{print $(NF-1)}' | tr -d ' ')
@@ -206,19 +265,189 @@ while IFS= read -r raw_line; do
         optimized_gflops="N/A"; optimized_us="N/A"
     fi
 
-    # 计算百分比
-    if [[ "$baseline_gflops" != "N/A" && "$optimized_gflops" != "N/A" ]]; then
-        gflops_pct=$(python3 -c "print(f'{${optimized_gflops}/${baseline_gflops}*100:.2f}%')")
-        us_pct=$(python3 -c "print(f'{${baseline_us}/${optimized_us}*100:.2f}%')")
-    else
-        gflops_pct="N/A"; us_pct="N/A"
-    fi
+    echo "  optimized=${optimized_gflops}GFLOPS/${optimized_us}us"
 
-    echo "  baseline=${baseline_gflops}GFLOPS/${baseline_us}us  optimized=${optimized_gflops}GFLOPS/${optimized_us}us  gflops=${gflops_pct}  us=${us_pct}"
-    echo "  baseline_kernel=${baseline_kernel}  optimized_kernel=${optimized_kernel}"
-
-    echo "${LINE_NUM},${m},${n},${k},${transA},${transB},${alpha},${beta},${lda},${ldb},${ldc},${ldd},${a_type},${b_type},${c_type},${d_type},${compute_type},${baseline_kernel},${baseline_gflops},${baseline_us},${optimized_kernel},${optimized_gflops},${optimized_us},${gflops_pct},${us_pct}" >> "${RESULT_FILE}"
+    # 暂时写入 optimized_kernel 为 N/A，后面会补充
+    echo "${LINE_NUM},N/A,${optimized_gflops},${optimized_us}" >> "${OPTIMIZED_RESULT_FILE}"
 done < <(docker exec ${CONTAINER} cat "${INPUT_FILE}")
+
+echo ""
+echo "Phase 2 完成！"
+echo ""
+
+# ============================================
+# Phase 3: 提取基线 kernel 名称（设置 TENSILE_DB）
+# ============================================
+echo "=========================================="
+echo "Phase 3: 提取基线 kernel 名称"
+echo "=========================================="
+
+# 创建 kernel 名称临时文件
+BASELINE_KERNEL_FILE="${OUT_DIR}/baseline_kernel.csv"
+OPTIMIZED_KERNEL_FILE="${OUT_DIR}/optimized_kernel.csv"
+echo "line,kernel" > "${BASELINE_KERNEL_FILE}"
+echo "line,kernel" > "${OPTIMIZED_KERNEL_FILE}"
+
+LINE_NUM=0
+while IFS= read -r raw_line; do
+    [[ -z "${raw_line// /}" ]] && continue
+    LINE_NUM=$((LINE_NUM + 1))
+
+    # 提取命令部分
+    cmd=$(echo "$raw_line" | sed 's/^[[:space:]]*[0-9]*[[:space:]]*//')
+
+    # 解析参数
+    parse_params "$cmd"
+
+    echo "[${LINE_NUM}/${TOTAL_LINES}] 基线 kernel m=${m} n=${n} k=${k}"
+
+    # 替换 ./rocblas-bench 为完整路径
+    full_cmd=$(echo "$cmd" | sed "s|./rocblas-bench|${BENCH_BIN}|g")
+
+    # 基线 kernel 提取（设置 TENSILE_DB，设置 HIP_VISIBLE_DEVICES）
+    kernel_log="${LOG_BASE}/baseline_kernel/line_${LINE_NUM}_m${m}_n${n}_k${k}.log"
+    kernel_output=$(docker exec -e HIP_VISIBLE_DEVICES=$GPU_IDS -e TENSILE_DB=0x8000 ${CONTAINER} timeout 300 ${full_cmd} 2>&1) || true
+    echo "$kernel_output" > "${kernel_log}"
+    baseline_kernel=$(extract_kernel "$kernel_output")
+
+    echo "  baseline_kernel=${baseline_kernel}"
+
+    echo "${LINE_NUM},${baseline_kernel}" >> "${BASELINE_KERNEL_FILE}"
+done < <(docker exec ${CONTAINER} cat "${INPUT_FILE}")
+
+echo ""
+echo "Phase 3 完成！"
+echo ""
+
+# ============================================
+# Phase 4: 提取优化后 kernel 名称（设置 TENSILE_DB）
+# ============================================
+echo "=========================================="
+echo "Phase 4: 提取优化后 kernel 名称"
+echo "=========================================="
+
+LINE_NUM=0
+while IFS= read -r raw_line; do
+    [[ -z "${raw_line// /}" ]] && continue
+    LINE_NUM=$((LINE_NUM + 1))
+
+    # 提取命令部分
+    cmd=$(echo "$raw_line" | sed 's/^[[:space:]]*[0-9]*[[:space:]]*//')
+
+    # 解析参数
+    parse_params "$cmd"
+
+    echo "[${LINE_NUM}/${TOTAL_LINES}] 优化 kernel m=${m} n=${n} k=${k}"
+
+    # 替换 ./rocblas-bench 为完整路径
+    full_cmd=$(echo "$cmd" | sed "s|./rocblas-bench|${BENCH_BIN}|g")
+
+    # 优化后 kernel 提取（设置 TENSILE_DB 和 ROCBLAS_TENSILE_LIBPATH，设置 HIP_VISIBLE_DEVICES）
+    kernel_log="${LOG_BASE}/optimized_kernel/line_${LINE_NUM}_m${m}_n${n}_k${k}.log"
+    kernel_output=$(docker exec -e HIP_VISIBLE_DEVICES=$GPU_IDS -e TENSILE_DB=0x8000 -e ROCBLAS_TENSILE_LIBPATH=${OPT_CONFIG_DIR} ${CONTAINER} timeout 300 ${full_cmd} 2>&1) || true
+    echo "$kernel_output" > "${kernel_log}"
+    optimized_kernel=$(extract_kernel "$kernel_output")
+
+    echo "  optimized_kernel=${optimized_kernel}"
+
+    echo "${LINE_NUM},${optimized_kernel}" >> "${OPTIMIZED_KERNEL_FILE}"
+done < <(docker exec ${CONTAINER} cat "${INPUT_FILE}")
+
+echo ""
+echo "Phase 4 完成！"
+echo ""
+
+# ============================================
+# Phase 5: 合并结果
+# ============================================
+echo "=========================================="
+echo "Phase 5: 合并结果"
+echo "=========================================="
+
+# 使用 Python 合并结果
+python3 << 'PYTHON_EOF'
+import csv
+
+BASELINE_FILE = '/root/changhl/baseline_results.csv'
+OPTIMIZED_FILE = '/root/changhl/optimized_results.csv'
+BASELINE_KERNEL_FILE = '/root/changhl/baseline_kernel.csv'
+OPTIMIZED_KERNEL_FILE = '/root/changhl/optimized_kernel.csv'
+RESULT_FILE = '/root/changhl/results.csv'
+
+# 读取基线结果
+baseline_data = {}
+with open(BASELINE_FILE, 'r') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        baseline_data[row['line']] = row
+
+# 读取优化结果
+optimized_data = {}
+with open(OPTIMIZED_FILE, 'r') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        optimized_data[row['line']] = row
+
+# 读取基线 kernel 名称
+baseline_kernel_data = {}
+with open(BASELINE_KERNEL_FILE, 'r') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        baseline_kernel_data[row['line']] = row['kernel']
+
+# 读取优化后 kernel 名称
+optimized_kernel_data = {}
+with open(OPTIMIZED_KERNEL_FILE, 'r') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        optimized_kernel_data[row['line']] = row['kernel']
+
+# 合并并写入最终结果
+with open(RESULT_FILE, 'w') as f:
+    header = "line,m,n,k,transA,transB,alpha,beta,lda,ldb,ldc,ldd,a_type,b_type,c_type,d_type,compute_type,baseline_kernel,baseline_gflops,baseline_us,optimized_kernel,optimized_gflops,optimized_us,gflops_pct,us_pct"
+    f.write(header + '\n')
+
+    for line_num in sorted(baseline_data.keys(), key=int):
+        b = baseline_data[line_num]
+        o = optimized_data.get(line_num, {})
+
+        baseline_gflops = b.get('baseline_gflops', 'N/A')
+        baseline_us = b.get('baseline_us', 'N/A')
+        optimized_gflops = o.get('optimized_gflops', 'N/A')
+        optimized_us = o.get('optimized_us', 'N/A')
+
+        # 获取 kernel 名称
+        baseline_kernel = baseline_kernel_data.get(line_num, 'N/A')
+        optimized_kernel = optimized_kernel_data.get(line_num, 'N/A')
+
+        # 计算百分比
+        if baseline_gflops != 'N/A' and optimized_gflops != 'N/A':
+            try:
+                gflops_pct = f"{float(optimized_gflops)/float(baseline_gflops)*100:.2f}%"
+                us_pct = f"{float(baseline_us)/float(optimized_us)*100:.2f}%"
+            except:
+                gflops_pct = 'N/A'
+                us_pct = 'N/A'
+        else:
+            gflops_pct = 'N/A'
+            us_pct = 'N/A'
+
+        row = [
+            line_num,
+            b.get('m', ''), b.get('n', ''), b.get('k', ''),
+            b.get('transA', ''), b.get('transB', ''),
+            b.get('alpha', ''), b.get('beta', ''),
+            b.get('lda', ''), b.get('ldb', ''), b.get('ldc', ''), b.get('ldd', ''),
+            b.get('a_type', ''), b.get('b_type', ''), b.get('c_type', ''), b.get('d_type', ''),
+            b.get('compute_type', ''),
+            baseline_kernel, baseline_gflops, baseline_us,
+            optimized_kernel, optimized_gflops, optimized_us,
+            gflops_pct, us_pct
+        ]
+        f.write(','.join(row) + '\n')
+
+print("Results merged successfully!")
+PYTHON_EOF
 
 echo "Done! Results: ${RESULT_FILE}"
 ```
@@ -233,8 +462,8 @@ echo "Done! Results: ${RESULT_FILE}"
 python3 -c "
 import csv
 
-RESULT_FILE = '<输出目录>/results.csv'
-TABLE_FILE = '<输出目录>/comparison_table.md'
+RESULT_FILE = '/root/changhl/results.csv'
+TABLE_FILE = '/root/changhl/comparison_table.md'
 
 with open(RESULT_FILE, 'r') as f:
     rows = list(csv.DictReader(f))
@@ -256,8 +485,40 @@ for gname, grows in groups.items():
     lines.append('| m | n | k | transA | transB | alpha | beta | lda | ldb | ldc | ldd | a_type | b_type | compute_type | 基线 kernel | 基线 GFLOPS | 基线 us | 优化后 kernel | 优化后 GFLOPS | 优化后 us | GFLOPS% | us% |')
     lines.append('|---|---|---|--------|--------|-------|------|-----|-----|-----|-----|--------|--------|-------------|-----------|-----------|--------|-------------|-------------|----------|---------|-----|')
     for r in grows:
-        lines.append(f\"| {r['m']} | {r['n']} | {r['k']} | {r['transA']} | {r['transB']} | {r['alpha']} | {r['beta']} | {r['lda']} | {r['ldb']} | {r['ldc']} | {r['ldd']} | {r['a_type']} | {r['b_type']} | {r['compute_type']} | {r['baseline_kernel']} | {r['baseline_gflops']} | {r['baseline_us']} | {r['optimized_kernel']} | {r['optimized_gflops']} | {r['optimized_us']} | {r['gflops_pct']} | {r['us_pct']} |\")
+        # 截断过长的 kernel 名称
+        baseline_kernel_short = r['baseline_kernel'][:50] + '...' if len(r['baseline_kernel']) > 50 else r['baseline_kernel']
+        optimized_kernel_short = r['optimized_kernel'][:50] + '...' if len(r['optimized_kernel']) > 50 else r['optimized_kernel']
+        lines.append(f\"| {r['m']} | {r['n']} | {r['k']} | {r['transA']} | {r['transB']} | {r['alpha']} | {r['beta']} | {r['lda']} | {r['ldb']} | {r['ldc']} | {r['ldd']} | {r['a_type']} | {r['b_type']} | {r['compute_type']} | {baseline_kernel_short} | {r['baseline_gflops']} | {r['baseline_us']} | {optimized_kernel_short} | {r['optimized_gflops']} | {r['optimized_us']} | {r['gflops_pct']} | {r['us_pct']} |\")
     lines.append('')
+
+# 统计汇总
+lines.append('## 统计汇总')
+lines.append('')
+
+gflops_values = []
+improved_count = 0
+regressed_count = 0
+
+for row in rows:
+    if row['gflops_pct'] != 'N/A':
+        pct = float(row['gflops_pct'].replace('%', ''))
+        gflops_values.append(pct)
+        if pct > 100:
+            improved_count += 1
+        elif pct < 100:
+            regressed_count += 1
+
+if gflops_values:
+    avg_gflops = sum(gflops_values) / len(gflops_values)
+    max_gflops = max(gflops_values)
+    min_gflops = min(gflops_values)
+
+    lines.append(f'- **平均 GFLOPS 百分比**: {avg_gflops:.2f}%')
+    lines.append(f'- **最大提升**: {max_gflops:.2f}%')
+    lines.append(f'- **最大下降**: {min_gflops:.2f}%')
+    lines.append(f'- **提升的 case 数**: {improved_count}')
+    lines.append(f'- **下降的 case 数**: {regressed_count}')
+    lines.append(f'- **无变化的 case 数**: {len(gflops_values) - improved_count - regressed_count}')
 
 with open(TABLE_FILE, 'w') as f:
     f.write('\n'.join(lines))
@@ -290,5 +551,7 @@ print(f'Table: {TABLE_FILE}')
 - 每条命令执行约需 10-30 秒，命令较多时全流程可能需要较长时间
 - 若命令较多或超时，可适当调整 timeout 值
 - 确保容器内 benchmark 可执行文件有执行权限：`docker exec <容器名> chmod +x /opt/dtk/lib/rocblas/benchmark_tool/rocblas-bench`
-- 脚本通过 `-e TENSILE_DB=0x8000` 启用 Tensile 调试输出，用于提取 gemm kernel 全称
+- **性能测试时不设置 `TENSILE_DB`**（避免影响性能），设置 `HIP_VISIBLE_DEVICES`（确保使用正确的 GPU）
+- **性能测试完成后，再单独运行一次设置 `TENSILE_DB=0x8000` 的测试**，用于提取 kernel 名称
 - 优化后执行通过 `-e ROCBLAS_TENSILE_LIBPATH=<优化配置目录>` 加载优化配置
+- 所有 rocblas 输出日志都会保存到对应的日志目录
