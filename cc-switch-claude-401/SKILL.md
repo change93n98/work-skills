@@ -6,7 +6,7 @@ description: 修复 cc-switch 打开的 Claude CLI 报 401(Invalid/Missing API k
 # 修复 cc-switch Claude CLI 401
 
 背景知识(2026-09-21 实测):cc-switch 会把当前激活 provider 的 env 写到
-`~/.claude/settings.json` 并生成临时配置 `C:\Users\92757\AppData\Local\Temp\claude_<provider-id>_<cc-switch-pid>.json`。
+`~/.claude/settings.json` 并生成临时配置 `%TEMP%\claude_<provider-id>_<cc-switch-pid>.json`。
 Claude Code 的认证头由变量名决定:
 
 - token 在 `ANTHROPIC_API_KEY` → 发 `x-api-key: <token>` 头
@@ -37,8 +37,8 @@ cc-switch 的 "OpenCode" provider(端点 `https://opencode.ai/zen/go`)**只认
 # ② 全局同步文件 ~/.claude/settings.json 的 env 段(第一轮修复常漏这里!)
 # ③ cc-switch 数据库(注意:改之前必须先关 cc-switch 进程,防退出时内存态覆盖)
 python -c "
-import sqlite3, json
-con = sqlite3.connect(r'C:/Users/92757/.cc-switch/cc-switch.db')
+import sqlite3, json, os
+con = sqlite3.connect(os.path.expanduser('~/.cc-switch/cc-switch.db'))
 # 当前激活 provider 的 id 在 ~/.cc-switch/settings.json 的 currentProviderClaude
 cur = con.execute(\"select id, name, settings_config from providers where app_type='claude'\")
 for i, n, cfg in cur.fetchall():
