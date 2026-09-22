@@ -119,23 +119,16 @@ Create a heading for each independently verifiable outcome. Within each workstre
 
 Repeat for W2, W3, and so on. Prefer 2-5 meaningful steps per workstream rather than one giant step or many mechanical edits. A step should be small enough to verify or reject independently.
 
-When optimization and performance comparison are both requested, separate them:
+Choose step names that match the task rather than copying a universal phase list. Useful generic progressions include:
 
-```markdown
-## Workstream W1: Implementation Optimization
-1. Inspect the current bottleneck and freeze correctness tests.
-2. Select and validate tile configuration.
-3. Improve data movement/coalescing and verify correctness.
-4. Add overlap or double buffering and verify correctness.
-5. Review the resulting implementation and supported shape contract.
-
-## Workstream W2: Before/After Performance Comparison
-1. Freeze device, shapes, dtype, warmup, repetitions, timing boundary, and metrics.
-2. Collect and preserve baseline samples before W1 changes performance behavior.
-3. Run optimized measurements under the identical contract after W1 passes correctness.
-4. Compute raw samples, median/mean/min/max, throughput, and speedup.
-5. Report regressions, noise, unsupported shapes, and the exact comparison boundary.
+```text
+Framework feature: architecture/contract -> thin vertical slice -> expansion -> integration
+Bug repair: reproduce -> minimize/diagnose -> regression test -> minimal fix -> affected regression
+Native operator: semantic contract -> API probe -> correct path -> registration/build -> target tests
+Optimization: correctness/baseline -> bottleneck hypothesis -> isolated changes -> controlled measurement
 ```
+
+For detailed optional patterns, read the matching section of `workstream-patterns.md`. Do not load or reproduce patterns that do not apply.
 
 Prefer vertical slices inside each workstream. Do not postpone all integration until the end.
 

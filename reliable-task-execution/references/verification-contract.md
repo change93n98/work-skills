@@ -89,15 +89,14 @@ When the request has multiple workstreams, verify and report each one separately
 
 Do not let strong evidence from one workstream hide missing evidence in another. Correctness tests do not complete a performance-comparison workstream; benchmark numbers do not complete an implementation-correctness workstream.
 
-For before/after performance comparisons, require:
+Select evidence by workstream type:
 
-- the same target identity, workload, input shapes/data, dtype, software build, timing boundary, warmup, and repetition policy unless a difference is the subject of the comparison;
-- baseline evidence collected or reproducibly preserved before optimization;
-- raw samples, not only the best run;
-- a stated aggregation method such as median plus mean/min/max;
-- throughput or domain metric and speedup/regression calculation;
-- noise, outliers, unsupported cases, and measurement limitations;
-- correctness passing before optimized results are promoted.
+- **Framework / feature:** interface contract, focused behavior, integration, compatibility or migration, and real entry point.
+- **Bug diagnosis / fix:** original reproducer, root-cause evidence, regression test that distinguishes before/after, and affected regression paths.
+- **Operator / native component:** semantic contract, build/load/registration, reference comparison, invalid/boundary cases, and real target-device execution.
+- **Optimization / performance:** correctness preservation plus a controlled baseline/after measurement contract, raw samples, aggregation, throughput/resource metric, and speedup/regression.
+
+Read `workstream-patterns.md` for detailed conditional guidance. Do not require performance evidence for ordinary feature or bug work unless performance is part of the user's goal.
 
 ## Evidence Matrix
 

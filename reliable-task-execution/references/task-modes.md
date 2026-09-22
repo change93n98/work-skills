@@ -52,16 +52,16 @@ For every workstream:
 4. Define workstream-specific acceptance and evidence.
 5. Add a final integration gate that reconciles all workstreams against the original request.
 
-For optimization plus benchmarking, use this dependency pattern:
+Common cross-workstream dependency patterns include:
 
 ```text
-Workstream 2, steps 1-2: freeze benchmark contract and collect baseline
-    -> Workstream 1: implement optimization in correctness-preserving steps
-        -> Workstream 2, steps 3-5: measure optimized result, analyze, report
-            -> Final reconciliation
+contract -> implementation -> integration
+reproduction -> diagnosis -> repair -> regression
+baseline -> change -> controlled comparison
+minimal target path -> expansion -> full acceptance
 ```
 
-This prevents a modified benchmark, changed dataset, different device, or easier workload from being used as the “after” result.
+Choose the dependency that protects the relevant evidence. Read the matching section of `workstream-patterns.md` for framework development, bug work, operator development, or optimization.
 
 ## Mode Shapes
 
@@ -170,4 +170,7 @@ If work can proceed safely, state the assumption and keep it reversible.
 | Rewrite a scheduler to address an intermittent timeout with no reproduction | Extended | Direction and root cause are unproven |
 | Rename a private symbol across many files with comprehensive automated checks | Standard | Broad but mechanical and reversible |
 | Change one authorization condition | Extended | Small diff, high consequence |
+| Add a framework plugin with a compatibility path and integration tests | Standard or Extended | One feature outcome, decomposed into contract, thin slice, expansion, and integration |
+| Reproduce, diagnose, and fix an intermittent bug | Standard or Extended | Diagnosis and repair may need separate dependent workstreams |
+| Add a native accelerator operator with registration and device tests | Extended | Semantic contract, native API, build integration, and real target evidence |
 | Optimize an operator and produce a controlled before/after performance report | Extended | Two workstreams: hardware-dependent implementation and benchmark evidence |

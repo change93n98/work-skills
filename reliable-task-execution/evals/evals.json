@@ -112,6 +112,45 @@
         "Each workstream has its own acceptance criteria, verification, and status, followed by an integration and final reconciliation gate.",
         "Correctness evidence and performance evidence are not treated as interchangeable."
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "在现有推理框架中增加一个可插拔调度后端，保留旧配置兼容性，并提供真实入口的集成测试。请先规划再实现。",
+      "expected_output": "Uses a framework/feature development pattern rather than an optimization workflow. It maps the existing architecture and extension points, freezes the backend/configuration compatibility contract, builds a thin end-to-end slice through the real entry point, expands required behavior, and verifies cross-module integration and backward compatibility.",
+      "files": [],
+      "assertions": [
+        "The plan identifies the existing architecture owner, extension point, callers, and compatibility promises before implementation.",
+        "The work is decomposed into small goals for interface/contract, thin vertical slice, required expansion, and integration rather than frontend/service/storage horizontal phases.",
+        "Backward compatibility and configuration migration behavior have explicit acceptance and verification.",
+        "The real framework entry point is exercised before the feature is declared complete.",
+        "The plan does not introduce performance benchmarking unless the user requested a performance goal."
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "定位并修复一个偶发请求超时问题。目前只有线上日志，没有稳定复现。不要直接重写调度器。",
+      "expected_output": "Uses bug diagnosis and repair workstreams. Diagnosis first establishes a failure signal, minimizes or improves reproducibility, ranks hypotheses, instruments narrow boundaries, and proves a root cause. Repair depends on that gate, adds a discriminating regression test, makes the smallest fix, and verifies the original symptom plus affected regressions.",
+      "files": [],
+      "assertions": [
+        "Diagnosis and repair are separated when the unknown root cause makes them independently reviewable outcomes.",
+        "The diagnosis steps include failure signal or reproduction, minimization, ranked hypotheses, focused instrumentation, and root-cause evidence.",
+        "The repair workstream depends on the root-cause gate and does not begin with a scheduler rewrite.",
+        "A regression test or reproducer distinguishes behavior before and after the fix.",
+        "The final integration gate reconciles the fix with the diagnosed cause and original timeout symptom."
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "为加速卡开发一个新的归一化算子：定义 Python 接口、实现 native kernel、完成注册和构建，并在真实设备上做正确性测试。没有要求性能优化。",
+      "expected_output": "Uses an operator/native component pattern. It freezes shape/dtype/layout/device/error semantics, confirms installed SDK APIs with headers or a probe, implements a minimal correct kernel, integrates declarations/registration/build/runtime discoverability, and adds reference, invalid, boundary, build/load, and target-device tests. It does not create an unnecessary benchmark workstream.",
+      "files": [],
+      "assertions": [
+        "The operator semantic contract covers shapes, dtypes, layouts, devices, errors, numerics, and unsupported cases.",
+        "Authoritative SDK headers or a minimal compile probe precede reliance on native APIs.",
+        "Implementation, registration/build integration, and layered tests are decomposed into clear ordered subgoals.",
+        "Host/static evidence is distinguished from compiled registration and real-device correctness evidence.",
+        "No performance-comparison workstream is created because optimization was not requested."
+      ]
     }
   ]
 }

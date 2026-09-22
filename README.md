@@ -335,19 +335,20 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 
 ### 功能
 
-为编码任务提供与范围和风险成比例的执行闭环：先识别请求中的独立目标并拆成 Workstream，再为每条工作流选择清晰的小目标、依赖、验收和验证；同时根据任务复杂度选择 Quick / Standard / Extended 模式。缺少构建、集成或真实硬件证据时明确报告 `PARTIAL` 或 `BLOCKED`。
+为框架/功能开发、Bug 定位修复、算子或 native 组件开发、性能优化等编码任务提供通用执行闭环：先识别独立目标并拆成 Workstream，再为每条工作流定义清晰的小目标、依赖、验收和验证；同时根据复杂度选择 Quick / Standard / Extended 模式。
 
 ### 核心特性
 
 | 特性 | 说明 |
 |------|------|
 | 自适应规划 | 小任务使用微计划，普通任务使用有序任务列表，复杂任务使用可恢复 Living Plan |
-| 多目标拆分 | 将“实现优化”和“性能对比”等独立目标拆成不同 Workstream，每条工作流有自己的步骤、验收和证据 |
-| 小目标分解 | 每个 Workstream 拆成 2-5 个可独立验证的小目标，避免把多个目标混成一条流水线 |
+| 多目标拆分 | 将可以独立成功或失败的目标拆成不同 Workstream，每条工作流有自己的步骤、验收和证据 |
+| 小目标分解 | 每个 Workstream 拆成 2-5 个可独立验证的小目标，适用于功能开发、诊断修复、算子开发和优化 |
 | 风险前置 | 对不可检查的 native SDK、外部 API 或版本化接口，先获取正式合同或运行最小探针 |
+| 领域模式路由 | 按需加载框架开发、Bug 诊断、算子/native 开发、性能优化四类 Workstream 模式，不把某个案例当通用流程 |
 | 分层验证 | 区分源码存在、聚焦测试、回归、构建、集成、运行时注册和真实目标验证 |
 | 完成诚实性 | 规划使用 `PLAN_READY` / `PLANNING_BLOCKED`；实现使用 `COMPLETE` / `PARTIAL` / `BLOCKED` |
-| Eval 覆盖 | 包含 Quick、Standard、硬件依赖、已有计划、虚假完成、任务升级，以及“优化 + 性能对比”双 Workstream 场景 |
+| Eval 覆盖 | 覆盖 Quick、Standard、框架功能、Bug 诊断修复、算子开发、优化对比、硬件依赖和虚假完成等场景 |
 
 ### 调用示例
 

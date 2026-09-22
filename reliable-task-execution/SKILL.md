@@ -1,6 +1,6 @@
 ---
 name: reliable-task-execution
-description: Plan, execute, and verify repository changes with planning depth proportional to scope and risk. Use for implementation plans and coding tasks where reliable completion evidence matters, especially multi-step, ambiguous, risky, long-running, hardware-dependent, or cross-module work. Keep obvious low-risk edits lightweight; do not use for pure explanation or unrelated writing.
+description: Plan, execute, and verify repository changes with planning depth proportional to scope and risk. Use for framework and feature development, bug diagnosis and repair, operator or native-component work, optimization, and other multi-step coding tasks where reliable completion evidence matters. Keep obvious low-risk edits lightweight; do not use for pure explanation or unrelated writing.
 ---
 
 # Reliable Task Execution
@@ -59,7 +59,7 @@ When multiple outcomes exist, create one numbered workstream per outcome. Do not
 - **Acceptance:** conditions that make this workstream complete;
 - **Verification:** commands, measurements, or artifacts that prove its result.
 
-After the workstreams, add an **Integration and Final Reconciliation** section describing cross-workstream ordering and the overall completion rule. A workstream may start before another finishes when its dependency allows it. For example, a performance-comparison workstream should freeze the benchmark contract and collect the baseline before optimization changes, then collect optimized measurements after the implementation workstream passes correctness.
+After the workstreams, add an **Integration and Final Reconciliation** section describing cross-workstream ordering and the overall completion rule. A workstream may start before another finishes when its dependency allows it. State exact gates such as contract-before-implementation, reproduction-before-fix, correctness-before-real-target validation, or baseline-before-change.
 
 Use this compact shape:
 
@@ -84,6 +84,8 @@ Verification: ...
 ```
 
 Do not create separate workstreams for incidental activities such as formatting or documentation unless they are explicit deliverables.
+
+When the task is substantial, read only the matching section of [workstream-patterns.md](references/workstream-patterns.md): framework/feature development, bug diagnosis and fix, operator/native development, or optimization/performance evaluation. Patterns are starting points, not mandatory checklists.
 
 ## Select a Mode
 
