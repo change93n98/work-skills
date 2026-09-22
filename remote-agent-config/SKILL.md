@@ -1,6 +1,6 @@
 ---
 name: remote-agent-config
-description: Push a Claude Code / Codex model config to remote SSH hosts in ~/.ssh/config so remote agents call the model API directly instead of a reverse tunnel back to the laptop. Renders from a chosen cc-switch provider preset (DeepSeek / OpenCode / Xiaomi MiMo / official / ...), so you pick which of several saved providers each server gets. Use whenever the user wants to sync, deploy, or switch claude/codex config on servers, choose between cc-switch providers or "换个模型/换个渠道" for remote nodes, remove the 127.0.0.1:15721 / RemoteForward dependency, refresh a remote ANTHROPIC_API_KEY or OPENAI_API_KEY, or fix "remote agent dies when laptop closes".
+description: Push a Claude Code / Codex model config to remote SSH hosts in ~/.ssh/config so remote agents call the model API directly instead of a reverse tunnel back to the laptop. Also writes the VS Code extension config into a local WSL distro (`--wsl`), where a distro-local cc-switch covers only the CLI and leaves the extension unconfigured. Renders from a chosen cc-switch provider preset (DeepSeek / OpenCode / Xiaomi MiMo / official / ...), so you pick which of several saved providers each server gets. Use whenever the user wants to sync, deploy, or switch claude/codex config on servers or in WSL, get the VS Code Claude Code extension working on a WSL/remote host, choose between cc-switch providers or "换个模型/换个渠道", remove the 127.0.0.1:15721 / RemoteForward dependency, refresh a remote ANTHROPIC_API_KEY or OPENAI_API_KEY, or fix "remote agent dies when laptop closes".
 ---
 
 # remote-agent-config
@@ -14,6 +14,7 @@ SSH tunnel (`RemoteForward 15721`) pointing back at the laptop.
 
 - "把本地 claude/codex 配置同步到服务器"
 - "远程用 DeepSeek / 换个渠道 / 换个 provider"
+- WSL 里 `claude` CLI 正常但 VS Code 的 Claude Code 插件不生效 / 读不到配置
 - remote agent stops working when the laptop sleeps / VS Code disconnects
 - need to refresh the model API key on remote hosts
 - a new server was added to `~/.ssh/config`
@@ -29,6 +30,8 @@ then ask:
 1. **节点选择** — question text: `要同步到哪个节点？`
    - `全部节点` — `~/.ssh/config` 中启用的所有 Host
    - `指定节点` — 输入别名或 IP 均可，支持逗号分隔多个
+   - `WSL 发行版` — `--list` 输出里 `wsl:<发行版>` 那几行；本机、不走 ssh，
+     且只写 VS Code 扩展的配置（见下方 WSL 一节）
 2. **同步内容** — question text: `要同步哪份配置？`
    - `全部（claude + codex）` — 推荐
    - `仅 Claude`
@@ -70,6 +73,28 @@ too.
 
 For each host it: creates dirs, backs up existing files to
 `<file>.bak-YYYYmmdd-HHMMSS`, uploads via `scp`, `chmod 600`, then verifies.
+
+### WSL targets (`--wsl <发行版>`)
+
+A WSL distro is local: no ssh, no sshd, no `~/.ssh/config` entry. File I/O goes
+through the `\\wsl.localhost\<distro>` share and only `chmod` shells out to
+`wsl.exe -d <distro>`.
+
+This target exists for the case where the distro runs its **own** cc-switch. That
+cc-switch owns `~/.claude/settings.json`, so the `claude` CLI there works fine —
+but the VS Code Claude Code extension does not read that file. It takes its config
+from the server's `~/.vscode-server/data/Machine/settings.json`
+(`claudeCode.environmentVariables`), which cc-switch does not manage. That is the
+file left unconfigured.
+
+So a WSL target writes **only** the extension file and deliberately leaves
+`~/.claude/settings.json` alone. Consequence: the extension follows whichever
+preset you pick here, while the CLI keeps following the distro's own cc-switch —
+pick the same provider if you want them to agree. Reload the VS Code window for
+the extension to pick it up.
+
+`--wsl` never fans out to the ssh hosts: a run with `--wsl` and no `--hosts`
+targets the distro alone.
 
 ### Choosing a preset
 
@@ -131,6 +156,7 @@ python3 "$S" --codex-provider 词易         # pick a codex preset by name
 python3 "$S"                              # all enabled Hosts, both agents, current presets
 python3 "$S" --force                      # re-write even if up to date
 python3 "$S" --exclude 219.145.122.226    # skip the jump box
+python3 "$S" --wsl <发行版>                # WSL: VS Code extension config only (Windows only)
 python3 "$S" --no-vscode                  # skip Machine/settings.json
 python3 "$S" --from-live                  # legacy: read live files, not presets
 python3 "$S" --db /path/to/cc-switch.db   # alternate database
@@ -147,8 +173,9 @@ To make this skill available to every agent runtime on Windows, keep a copy in:
 - `%USERPROFILE%\.claude\skills\remote-agent-config\` (Claude Code, and
   opencode's external scan)
 - `%USERPROFILE%\.codex\skills\remote-agent-config\` (Codex)
+- `%USERPROFILE%\.zcode\skills\remote-agent-config\` (zcode)
 
-If you edit one copy, copy the change to the other two.
+If you edit one copy, copy the change to the other three.
 
 ## Loopback guard
 
@@ -172,6 +199,11 @@ reachable upstream, or pass `--allow-loopback` if you really mean it.
 - The OpenCode preset carries `ANTHROPIC_CUSTOM_HEADERS=x-opencode-session:
   windows-cc-switch`, a laptop-side identity. Nodes that share a network home
   will collide on it; set a per-node value in the remote file if that matters.
+  This bites a WSL target too: the Windows preset would label the distro's
+  extension `windows-cc-switch` while its CLI carries its own name, so give WSL
+  a per-distro value (e.g. `wsl-<distro>`) if that distinction matters.
+- `--wsl` needs Windows (it uses `wsl.exe` and the `\\wsl.localhost` share).
+  Running the skill inside WSL itself cannot reach another distro this way.
 - After changing `~/.vscode-server/data/Machine/settings.json`, the user must
   reload the VS Code window for the extension to pick it up.
 - Existing remote files are backed up, not merged, except the Machine settings

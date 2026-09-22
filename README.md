@@ -14,7 +14,7 @@ Claude Code / Codex 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)**
 | [llm-prof](#skill-2-llm-prof---大模型推理-profiling-分析) | 启动 vLLM / SGLang 服务跑 bench profiling，分析 trace 输出 prefill / decode 算子耗时汇总表 |
 | [prof-analy](#skill-3-prof-analy---模型性能分析) | 解析 PyTorch profiling trace，按算子类别（gemm / attention / conv 等）汇总耗时并生成报告 |
 | [reliable-task-execution](#skill-7-reliable-task-execution---可靠任务执行) | 按任务风险自适应选择 Quick / Standard / Extended 流程，建立可恢复计划、分层验证和基于证据的完成状态 |
-| [remote-agent-config](#skill-5-remote-agent-config---远程-agent-配置同步) | 从 cc-switch 预设渲染 Claude Code / Codex 配置并推送到远程节点，直连模型 API、摆脱反向 SSH 隧道 |
+| [remote-agent-config](#skill-5-remote-agent-config---远程-agent-配置同步) | 从 cc-switch 预设渲染 Claude Code / Codex 配置并推送到远程节点，直连模型 API、摆脱反向 SSH 隧道；亦可把 VS Code 扩展配置写进本机 WSL |
 | [remote-dev](#skill-9-remote-dev---远程开发容器) | SSH 到加速卡节点，检查 / 复用 / 创建并验证 Docker 开发容器（太初 / NVIDIA / 通用兜底） |
 | [ssh-docker](#skill-4-ssh-docker---远程-ssh-docker-工作流) | 通过 SSH + `docker exec` 在远程容器执行编译 / 测试 / profiling，代码本地编辑再同步 |
 
@@ -262,6 +262,8 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 
 把 Claude Code / Codex 的模型配置推送到 `~/.ssh/config` 里的远程节点，让远程 agent **直接调用模型 API**，不再依赖指回笔记本的反向 SSH 隧道（`RemoteForward 15721`）。配置从 **cc-switch 的 provider 预设**渲染，可指定把哪一个预设同步到哪一台机器。
 
+另可把 **VS Code 扩展**的配置写进本机 WSL 发行版（`--wsl`）。场景是：发行版里自己装了 cc-switch，它管的是 CLI 读的 `~/.claude/settings.json`，而 VS Code 的 Claude Code 插件读的是 `~/.vscode-server/data/Machine/settings.json` 里的 `claudeCode.environmentVariables` —— 那份 cc-switch 不碰，于是 CLI 好用、插件却是空的。
+
 ### 核心特性
 
 | 特性 | 说明 |
@@ -271,16 +273,17 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 | Codex 改写而非照搬 | 只保留可移植的键，丢掉 `[windows]` / `[projects.*]` / `[mcp_servers*]` 与 Windows 路径；紧凑 `modelCatalog` 展开为 Codex 原生模型描述格式 |
 | 幂等推送 | 先比对远程已有内容（JSON 结构比较、TOML 归一化），一致则跳过且不写不备份；`--force` 强制重写 |
 | 安全 | 备份到 `<file>.bak-时间戳`，`chmod 600`；`--dry-run` 输出自动脱敏；拒绝推送 loopback `base_url` 和无 `base_url` 的官方登录型预设 |
+| WSL 目标 | `--wsl <发行版>` 把 VS Code 扩展配置写进本机 WSL：文件走 `\\wsl.localhost` 共享直读写，`chmod` 走 `wsl.exe`，**不用在 WSL 里装 sshd**；只写 `Machine/settings.json`，CLI 那份留给发行版自己的 cc-switch |
 
 ### 触发词
 
-`remote-agent-config`、`同步配置到服务器`、`远程用 DeepSeek`、`换个渠道`、`换个 provider`、`远程 agent 掉线`
+`remote-agent-config`、`同步配置到服务器`、`远程用 DeepSeek`、`换个渠道`、`换个 provider`、`远程 agent 掉线`、`WSL 里的 Claude Code 插件不生效`、`WSL 插件读不到配置`
 
 ### 输入
 
 调用时用 `question` 工具交互式询问（中文）：
 
-1. **节点选择**：全部节点，或指定别名 / IP（逗号分隔多个）
+1. **节点选择**：全部节点，或指定别名 / IP（逗号分隔多个），或 WSL 发行版（`--list` 输出里的 `wsl:<发行版>` 那几行）
 2. **同步内容**：全部（claude + codex）/ 仅 Claude / 仅 Codex
 3. **cc-switch 预设**：每个 agent 问一次，首项为「当前激活」，其后为该 agent 的其余预设
 
@@ -288,6 +291,7 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 
 - 远程 `~/.claude/settings.json`、`~/.codex/config.toml`、`~/.codex/auth.json`、`~/.codex/cc-switch-model-catalog.json`
 - 合并写入 `~/.vscode-server/data/Machine/settings.json` 的 `claudeCode.environmentVariables`（其余键保留）
+- WSL 目标只写该发行版的 `~/.vscode-server/data/Machine/settings.json`，CLI 的 `~/.claude/settings.json` 保持不动
 - 末行汇总：`done: N updated, M already up to date (targets)`
 
 ---
@@ -500,6 +504,7 @@ pip install torch transformers vllm
 - OpenSSH 客户端（`ssh` / `scp`）
 - 本机已安装 cc-switch（读取 `~/.cc-switch/cc-switch.db` 的 `providers` 表）；没有 cc-switch 时可用 `--from-live` 直读生效文件
 - 远程节点: 无需任何依赖，只落配置文件
+- WSL 目标（`--wsl`，仅 Windows）：`wsl.exe`；WSL 内无需 sshd，也不改 `~/.ssh/config`
 
 ### cc-switch-claude-401 依赖
 

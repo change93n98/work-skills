@@ -9,8 +9,10 @@ depending on a reverse tunnel back to the laptop.
 
 import argparse
 import json
+import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -120,11 +122,12 @@ TRANSIENT = (
 )
 
 
-def run(cmd, timeout=60, retries=3, delay=3, cwd=None):
+def run(cmd, timeout=60, retries=3, delay=3, cwd=None, env=None):
     last = None
     for attempt in range(retries):
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                               cwd=cwd, env=env)
         except subprocess.TimeoutExpired:
             last = f"local timeout after {timeout}s"
             time.sleep(delay)
@@ -153,6 +156,99 @@ def scp_to(host, local_path, remote_path):
             cwd=str(local_path.parent))
     if r.returncode != 0:
         raise RuntimeError(f"scp -> {host}:{remote_path} failed: {r.stderr.strip()}")
+
+
+# --- WSL targets ---------------------------------------------------------------
+#
+# A WSL distro is local: no ssh, no sshd, no ~/.ssh/config entry. File I/O goes
+# through the \\wsl.localhost share and only the places that need real Linux
+# semantics (chmod) shell out to wsl.exe.
+#
+# A distro running its own cc-switch keeps owning ~/.claude/settings.json -- that
+# is what the `claude` CLI there reads. The VS Code extension, however, takes its
+# config from the server's Machine/settings.json, which cc-switch does not manage;
+# that is why the extension goes unconfigured while the CLI works. So a WSL target
+# writes the extension config only, and leaves the CLI file alone.
+
+def _wsl_env():
+    # wsl.exe emits UTF-16 unless this is set.
+    return dict(os.environ, WSL_UTF8="1")
+
+
+def wsl_run(distro, cmd, check=True):
+    r = run(["wsl.exe", "-d", distro, "--", "bash", "-c", cmd], env=_wsl_env())
+    if check and r.returncode != 0:
+        raise RuntimeError(f"wsl {distro}: {r.stderr.strip() or r.stdout.strip()}")
+    return r
+
+
+def wsl_unc(distro, linux_path):
+    """Map a WSL-internal absolute path to the Windows share path."""
+    return "//wsl.localhost/" + distro + "/" + str(linux_path).lstrip("/").replace("\\", "/")
+
+
+def wsl_distros():
+    """Installed WSL distro names, or [] when WSL is unavailable."""
+    try:
+        r = run(["wsl.exe", "-l", "-q"], timeout=20, env=_wsl_env())
+    except Exception:
+        return []
+    if r.returncode != 0:
+        return []
+    # -l still emits UTF-16 on some builds even with WSL_UTF8.
+    return [ln.strip() for ln in r.stdout.replace("\x00", "").splitlines() if ln.strip()]
+
+
+def sync_wsl(distro, env_list, ts, force=False):
+    """Merge claudeCode.environmentVariables into the distro's Machine settings.
+
+    Returns "updated" or "skip". Raises on failure.
+    """
+    home = wsl_run(distro, 'printf %s "$HOME"').stdout.strip()
+    if not home.startswith("/"):
+        raise RuntimeError(f"could not read $HOME in distro {distro!r}")
+    target = f"{home}/.vscode-server/data/Machine/settings.json"
+    path = wsl_unc(distro, target)
+
+    cur = {}
+    if os.path.exists(path):
+        try:
+            parsed = json.loads(Path(path).read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                cur = parsed
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            cur = {}
+    if not force and cur.get("claudeCode.environmentVariables") == env_list:
+        return "skip"
+
+    if os.path.exists(path):
+        shutil.copy2(path, f"{path}.bak-{ts}")
+    cur["claudeCode.environmentVariables"] = env_list
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(cur, indent=4) + "\n", encoding="utf-8")
+    # The file carries the API key, so it must not stay world-readable.
+    wsl_run(distro, f"chmod 600 {shlex.quote(target)}")
+
+    back = json.loads(dest.read_text(encoding="utf-8"))
+    if back.get("claudeCode.environmentVariables") != env_list:
+        raise RuntimeError("wrote Machine settings but the value did not stick")
+    return "updated"
+
+
+def redact_env_list(env_list):
+    """Redact env entries whose *name* is credential-shaped.
+
+    redact_secrets() keys off the dict key, and here the key is always the literal
+    "value", so it would sail straight past a live ANTHROPIC_API_KEY.
+    """
+    out = []
+    for kv in env_list:
+        if isinstance(kv, dict) and _is_secret_key(kv.get("name", "")) and kv.get("value"):
+            out.append({"name": kv.get("name"), "value": "***REDACTED***"})
+        else:
+            out.append(kv)
+    return out
 
 
 def loopback_host(url):
@@ -549,6 +645,8 @@ def main():
                     help="read the live ~/.claude and ~/.codex files instead of cc-switch presets")
     ap.add_argument("--db", help="override path to cc-switch.db")
     ap.add_argument("--exclude", default="", help="comma-separated aliases to skip")
+    ap.add_argument("--wsl", help="comma-separated WSL distros to sync the VS Code "
+                                  "extension config into (local: UNC + wsl.exe, no ssh)")
     ap.add_argument("--dry-run", action="store_true", help="print generated config, do not touch remotes")
     ap.add_argument("--force", action="store_true", help="re-write even when the remote is already up to date")
     ap.add_argument("--no-vscode", action="store_true", help="do not touch VS Code Machine settings")
@@ -566,18 +664,31 @@ def main():
         list_providers(args.targets, args.db)
         return
 
+    wsl_targets = [x.strip() for x in (args.wsl or "").split(",") if x.strip()]
+    if wsl_targets and not do_claude:
+        raise SystemExit("--wsl 写的是 VS Code 扩展的配置，来自 claude 预设，"
+                         "单独指定 --targets codex 时没有可写的内容")
+
     entries = parse_config(SSH_CONFIG)
     excludes = {x.strip() for x in args.exclude.split(",") if x.strip()}
-    hosts = (resolve_hosts([x for x in args.hosts.split(",") if x.strip()], entries)
-             if args.hosts else enabled_hosts(entries, excludes))
+    if args.hosts:
+        hosts = resolve_hosts([x for x in args.hosts.split(",") if x.strip()], entries)
+    elif wsl_targets:
+        # WSL is local. Without an explicit --hosts, do not fan out to every
+        # ssh host just because --wsl was passed.
+        hosts = []
+    else:
+        hosts = enabled_hosts(entries, excludes)
 
     if args.list:
         for e in entries:
             print(f"{e['alias']}\t{e['hostname'] or ''}")
+        for d in wsl_distros():
+            print(f"wsl:{d}\t(WSL 发行版，本机；只同步 VS Code 扩展配置)")
         if args.hosts:
             log("selected: " + ", ".join(hosts))
         return
-    if not hosts:
+    if not hosts and not wsl_targets:
         raise SystemExit("no target hosts")
 
     claude, codex_toml, env, env_list = None, None, {}, []
@@ -629,7 +740,11 @@ def main():
             log("=== codex ~/.codex/config.toml (secrets redacted) ===")
             log(redact_toml(codex_toml))
             log("=== auth.json: %s, catalog: %s ===" % (auth_txt is not None, catalog_txt is not None))
-        log("hosts: " + ", ".join(hosts))
+        if wsl_targets:
+            log("=== WSL: <home>/.vscode-server/data/Machine/settings.json "
+                "claudeCode.environmentVariables (secrets redacted) ===")
+            log(json.dumps(redact_env_list(env_list), indent=2, ensure_ascii=False))
+        log("hosts: " + ", ".join(hosts + ["wsl:" + d for d in wsl_targets]))
         return
 
     ts = time.strftime("%Y%m%d-%H%M%S")
@@ -750,11 +865,23 @@ def main():
             log(f"   FAILED: {e}")
             failures.append(host)
 
+    for distro in wsl_targets:
+        log(f"== wsl:{distro} ==")
+        try:
+            if sync_wsl(distro, env_list, ts, force=args.force) == "skip":
+                log("   已是最新，跳过 (up to date)")
+                skipped += 1
+            else:
+                log("   Machine settings 已更新；VS Code 窗口需重新加载才会生效")
+        except Exception as e:
+            log(f"   FAILED: {e}")
+            failures.append(f"wsl:{distro}")
+
     log("")
     if failures:
         log("failed hosts: " + ", ".join(failures))
         sys.exit(1)
-    updated = len(hosts) - skipped
+    updated = len(hosts) + len(wsl_targets) - skipped
     log(f"done: {updated} updated, {skipped} already up to date ({args.targets})")
 
 
