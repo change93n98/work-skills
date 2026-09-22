@@ -1,0 +1,2 @@
+# This repo is consumed on Linux/WSL; keep every text file LF in the object store.
+* text=auto eol=lf

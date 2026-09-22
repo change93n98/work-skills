@@ -1,16 +1,20 @@
 # Work Skills
 
-Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU 性能分析工具。包含四个独立 skill：BLAS GEMM 性能对比、大模型推理 Profiling 分析、模型性能分析和 SSH Docker 远程工作流。
+Claude Code 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)** 平台的 GPU 性能分析工作流，另含远程开发与环境配置类 skill。
 
 ## 目录
 
-- [安装](#安装)
-- [Skill 1: blas-compare](#skill-1-blas-compare---gemm-性能对比)
-- [Skill 2: llm-prof](#skill-2-llm-prof---大模型推理-profiling-分析)
-- [Skill 3: prof-analy](#skill-3-prof-analy---模型性能分析)
-- [Skill 4: ssh-docker](#skill-4-ssh-docker---远程-ssh-docker-工作流)
-- [项目结构](#项目结构)
-- [依赖](#依赖)
+| Skill | 简介 |
+|-------|------|
+| [blas-compare](#skill-1-blas-compare---gemm-性能对比) | 在容器内对比基线 / 优化后 rocBLAS 的 GEMM 性能，自动采集 GFLOPS 与耗时并生成对比表 |
+| [blaslt-compare](blaslt-compare/SKILL.md) | hipBLASLt GEMM 性能对比：批量执行 `hipblaslt-bench`，采集 GFLOPS、耗时与 kernel 名称 |
+| [install-vscode-server](install-vscode-server/SKILL.md) | 在远程容器 / 服务器内快速安装 VS Code Server，绕过 Remote 连接时的慢速自动下载 |
+| [llm-prof](#skill-2-llm-prof---大模型推理-profiling-分析) | 启动 vLLM / SGLang 服务跑 bench profiling，分析 trace 输出 prefill / decode 算子耗时汇总表 |
+| [prof-analy](#skill-3-prof-analy---模型性能分析) | 解析 PyTorch profiling trace，按算子类别（gemm / attention / conv 等）汇总耗时并生成报告 |
+| [ssh-docker](#skill-4-ssh-docker---远程-ssh-docker-工作流) | 通过 SSH + `docker exec` 在远程容器执行编译 / 测试 / profiling，代码本地编辑再同步 |
+| [remote-agent-config](#skill-5-remote-agent-config---远程-agent-配置同步) | 从 cc-switch 预设渲染 Claude Code / Codex 配置并推送到远程节点，直连模型 API、摆脱反向 SSH 隧道 |
+
+其余章节：[安装](#安装) · [项目结构](#项目结构) · [依赖](#依赖) · [许可证](#许可证) · [作者](#作者)
 
 ---
 
@@ -20,12 +24,17 @@ Claude Code 自定义 Skills 集合，面向 **海光 DCU (ROCm)** 平台的 GPU
 
 ```bash
 cp -r blas-compare ~/.claude/skills/
+cp -r blaslt-compare ~/.claude/skills/
+cp -r install-vscode-server ~/.claude/skills/
 cp -r llm-prof ~/.claude/skills/
 cp -r prof-analy ~/.claude/skills/
 cp -r ssh-docker ~/.claude/skills/
+cp -r remote-agent-config ~/.claude/skills/
 ```
 
 安装后在 Claude Code 对话中触发对应关键词即可调用。
+
+> `remote-agent-config` 的 `sync.py` 会被 skill 按固定路径调用，请保持它与 `SKILL.md` 平级、不要单独挪动。
 
 ---
 
@@ -237,30 +246,75 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 
 ---
 
+## Skill 5: remote-agent-config - 远程 Agent 配置同步
+
+### 功能
+
+把 Claude Code / Codex 的模型配置推送到 `~/.ssh/config` 里的远程节点，让远程 agent **直接调用模型 API**，不再依赖指回笔记本的反向 SSH 隧道（`RemoteForward 15721`）。配置从 **cc-switch 的 provider 预设**渲染，可指定把哪一个预设同步到哪一台机器。
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| 预设可选 | 从 `~/.cc-switch/cc-switch.db` 读出全部 provider 预设，`--list-providers` 列出（`*` 标当前激活），按名字选用，唯一子串即可匹配 |
+| 读预设而非生效文件 | 生效文件常被 cc-switch 本地代理改写成 `127.0.0.1:15721`；预设里存的才是真实上游 `base_url` 与凭据，这才是远程能直连的来源 |
+| Codex 改写而非照搬 | 只保留可移植的键，丢掉 `[windows]` / `[projects.*]` / `[mcp_servers*]` 与 Windows 路径；紧凑 `modelCatalog` 展开为 Codex 原生模型描述格式 |
+| 幂等推送 | 先比对远程已有内容（JSON 结构比较、TOML 归一化），一致则跳过且不写不备份；`--force` 强制重写 |
+| 安全 | 备份到 `<file>.bak-时间戳`，`chmod 600`；`--dry-run` 输出自动脱敏；拒绝推送 loopback `base_url` 和无 `base_url` 的官方登录型预设 |
+
+### 触发词
+
+`remote-agent-config`、`同步配置到服务器`、`远程用 DeepSeek`、`换个渠道`、`换个 provider`、`远程 agent 掉线`
+
+### 输入
+
+调用时用 `question` 工具交互式询问（中文）：
+
+1. **节点选择**：全部节点，或指定别名 / IP（逗号分隔多个）
+2. **同步内容**：全部（claude + codex）/ 仅 Claude / 仅 Codex
+3. **cc-switch 预设**：每个 agent 问一次，首项为「当前激活」，其后为该 agent 的其余预设
+
+### 输出
+
+- 远程 `~/.claude/settings.json`、`~/.codex/config.toml`、`~/.codex/auth.json`、`~/.codex/cc-switch-model-catalog.json`
+- 合并写入 `~/.vscode-server/data/Machine/settings.json` 的 `claudeCode.environmentVariables`（其余键保留）
+- 末行汇总：`done: N updated, M already up to date (targets)`
+
+---
+
 ## 项目结构
 
 ```
 work-skills/
-├── README.md              # 项目说明文档
-├── blas-compare/          # BLAS GEMM 性能对比 skill
-│   ├── skill.md
-│   ├── run_benchmark.sh
-│   ├── parse_results.py
-│   └── ...
-├── llm-prof/              # 大模型推理 Profiling 分析 skill
-│   ├── skill.md
-│   ├── run_profiling.py
-│   ├── generate_report.py
-│   └── ...
-├── prof-analy/            # 模型性能分析 skill
-│   ├── skill.md           # Skill 定义文件
-│   ├── analyze.py         # 核心分析脚本
-│   ├── README.md          # 详细说明文档
-│   ├── QUICKSTART.md      # 快速开始指南
-│   ├── example.py         # 使用示例
-│   └── test_prof_analy.py # 测试脚本
-└── ssh-docker/            # SSH Docker 远程工作流 skill
-    └── SKILL.md           # Skill 定义文件
+├── README.md                  # 项目说明文档
+├── blas-compare/              # BLAS GEMM 性能对比 skill
+│   └── SKILL.md
+├── blaslt-compare/            # hipBLASLt GEMM 性能对比 skill
+│   └── SKILL.md
+├── install-vscode-server/     # 远程快速安装 VS Code Server skill
+│   └── SKILL.md
+├── llm-prof/                  # 大模型推理 Profiling 分析 skill
+│   ├── SKILL.md
+│   ├── evals/
+│   │   └── evals.json
+│   ├── references/            # vLLM / SGLang 指南、示例与样例日志
+│   └── scripts/
+│       ├── prof_analyze.py
+│       ├── prof_analyze_perfetto.py
+│       └── quick_prof.sh
+├── prof-analy/                # 模型性能分析 skill
+│   ├── skill.md               # Skill 定义文件
+│   ├── analyze.py             # 核心分析脚本
+│   ├── README.md              # 详细说明文档
+│   ├── QUICKSTART.md          # 快速开始指南
+│   ├── example.py             # 使用示例
+│   ├── test_prof_analy.py     # 测试脚本
+│   └── .gitignore
+├── remote-agent-config/       # 远程 Agent 配置同步 skill
+│   ├── SKILL.md               # Skill 定义文件
+│   └── sync.py                # 推送脚本（须与 SKILL.md 平级）
+└── ssh-docker/                # SSH Docker 远程工作流 skill
+    └── SKILL.md
 ```
 
 ## 依赖
@@ -281,6 +335,13 @@ pip install torch transformers vllm
 
 - Windows: OpenSSH 客户端
 - 远程节点: Docker, SSH 服务
+
+### remote-agent-config 依赖
+
+- Python 3.11+（只用标准库 `tomllib` / `sqlite3`，无需额外 pip 包）
+- OpenSSH 客户端（`ssh` / `scp`）
+- 本机已安装 cc-switch（读取 `~/.cc-switch/cc-switch.db` 的 `providers` 表）；没有 cc-switch 时可用 `--from-live` 直读生效文件
+- 远程节点: 无需任何依赖，只落配置文件
 
 ---
 
