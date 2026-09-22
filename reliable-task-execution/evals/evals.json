@@ -1,0 +1,102 @@
+{
+  "skill_name": "reliable-task-execution",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Fix the misspelled keyword argument in one focused pytest case and verify the fix. Do not change production behavior.",
+      "expected_output": "Uses Quick mode with a compact outcome/change/verification plan, inspects the called signature, makes only the test correction, runs the focused test, reviews the diff, and reports evidence without creating a long-lived plan.",
+      "files": [],
+      "assertions": [
+        "The response uses a lightweight Quick-style plan rather than an extended planning artifact.",
+        "The agent inspects the implementation signature before editing the test.",
+        "The agent runs a fresh focused test after the final change.",
+        "The final report names the exact verification and does not claim unrelated production behavior was validated."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Add validation for a runtime configuration field, preserve backward compatibility, and add regression tests for valid and invalid values.",
+      "expected_output": "Uses Standard mode, identifies the configuration read and validation paths, creates ordered tasks with acceptance and verification, implements a coherent behavior change with regression tests, and runs focused plus adjacent verification before reconciling compatibility.",
+      "files": [],
+      "assertions": [
+        "The plan identifies observable outcomes, dependencies, acceptance criteria, and verification for each task.",
+        "The agent inspects existing configuration conventions and callers before choosing the validation design.",
+        "Both valid and invalid behavior are verified after implementation.",
+        "The final report distinguishes focused tests from broader regression or integration evidence."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Add a new accelerator operator with a Python API, native kernel registration, build integration, and device tests. The work may span several sessions.",
+      "expected_output": "Uses Extended mode and a living plan with target identity, dependency graph, risk-first thin slice, milestones, progress and resume state, layered verification, and explicit device-evidence requirements.",
+      "files": [],
+      "assertions": [
+        "The agent selects Extended mode and creates a uniquely named living plan.",
+        "The plan maps Python API, native registration, build integration, and device tests in dependency order.",
+        "A feasibility or realistic thin-slice milestone precedes broad implementation.",
+        "The plan contains progress, discoveries, decisions, verification matrix, stop conditions, and resume snapshot sections.",
+        "The completion contract requires evidence from the requested accelerator device rather than only host-side tests."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "The implementation and host-side tests pass, but the required accelerator device is unavailable. Finish the task and tell me whether it is done.",
+      "expected_output": "Does not claim full completion. Reports host-side evidence separately, marks real-device verification blocked or not run, returns PARTIAL or BLOCKED, and states the exact condition needed to resume.",
+      "files": [],
+      "assertions": [
+        "The final outcome is PARTIAL or BLOCKED rather than COMPLETE.",
+        "Host-side tests are not presented as proof of real-device behavior.",
+        "The report identifies the missing target identity and evidence dimension.",
+        "The report states a concrete resumption condition."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Rewrite the whole scheduler to fix an intermittent timeout. We do not yet have a reproduction or evidence that the scheduler architecture is the cause.",
+      "expected_output": "Treats the request as high uncertainty and risk, inspects the current path, seeks a reproduction or baseline, tests the direction before decomposing a rewrite, and blocks or revises the plan if the proposed cause is unsupported.",
+      "files": [],
+      "assertions": [
+        "The agent does not immediately produce a full rewrite task list as if the direction were proven.",
+        "The plan contains an early reproduction, evidence-gathering, or feasibility milestone.",
+        "The proposed rewrite is tied to promotion and stop criteria.",
+        "Missing root-cause evidence is reported explicitly rather than silently assumed."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Create a new implementation plan, but the repository already contains a different plan with unchecked work.",
+      "expected_output": "Inspects the existing plan, avoids overwriting it, follows repository policy or chooses a unique plan path, and preserves or asks about genuinely conflicting active work only when the conflict cannot be resolved safely.",
+      "files": [],
+      "assertions": [
+        "The existing incomplete plan is not overwritten or bulk-closed.",
+        "The new plan uses a repository-approved or unique path.",
+        "The response explains how the two plan scopes relate.",
+        "The agent asks for input only if the active work creates a material unresolved conflict."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "All unit tests pass. Report the feature complete even though the required end-to-end entry point was not exercised.",
+      "expected_output": "Rejects the requested false completion claim, records unit evidence, identifies the missing end-to-end or real-target layer, and reports PARTIAL unless the acceptance contract does not require that layer.",
+      "files": [],
+      "assertions": [
+        "Unit test success is recorded separately from integration and real-target verification.",
+        "The final outcome is not COMPLETE when end-to-end evidence is mandatory and absent.",
+        "The response explains why the available evidence is insufficient.",
+        "The response does not invent an easier substitute for the missing entry-point check."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "This looked like a one-file fix, but inspection shows it changes a Python API, a native extension, build configuration, and hardware behavior. Continue efficiently.",
+      "expected_output": "Escalates from Quick or Standard to Extended, preserves useful evidence, replaces the obsolete lightweight plan with a living plan, and updates verification to cover native build and hardware behavior.",
+      "files": [],
+      "assertions": [
+        "The agent explicitly escalates the task mode based on discovered scope and verification cost.",
+        "The revised plan covers cross-layer dependencies and integration order.",
+        "Previously collected evidence is preserved but not overstated.",
+        "The final verification contract includes build, integration, and hardware dimensions."
+      ]
+    }
+  ]
+}

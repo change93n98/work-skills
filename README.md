@@ -1,6 +1,6 @@
 # Work Skills
 
-Claude Code 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)** 平台的 GPU 性能分析工作流，另含远程开发与环境配置类 skill。
+Claude Code / Codex 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)** 平台的 GPU 性能分析工作流，另含远程开发与环境配置类 skill。
 
 ## 目录
 
@@ -14,6 +14,7 @@ Claude Code 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)** 平台�
 | [prof-analy](#skill-3-prof-analy---模型性能分析) | 解析 PyTorch profiling trace，按算子类别（gemm / attention / conv 等）汇总耗时并生成报告 |
 | [ssh-docker](#skill-4-ssh-docker---远程-ssh-docker-工作流) | 通过 SSH + `docker exec` 在远程容器执行编译 / 测试 / profiling，代码本地编辑再同步 |
 | [remote-agent-config](#skill-5-remote-agent-config---远程-agent-配置同步) | 从 cc-switch 预设渲染 Claude Code / Codex 配置并推送到远程节点，直连模型 API、摆脱反向 SSH 隧道 |
+| [reliable-task-execution](#skill-7-reliable-task-execution---可靠任务执行) | 按任务风险自适应选择 Quick / Standard / Extended 流程，建立可恢复计划、分层验证和基于证据的完成状态 |
 
 其余章节：[安装](#安装) · [项目结构](#项目结构) · [依赖](#依赖) · [许可证](#许可证) · [作者](#作者)
 
@@ -21,7 +22,7 @@ Claude Code 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)** 平台�
 
 ## 安装
 
-将 skill 目录复制到 Claude Code 的 skills 目录下即可自动加载：
+按使用的客户端将 skill 目录复制到对应的用户级 skills 目录：
 
 ```bash
 cp -r blas-compare ~/.claude/skills/
@@ -32,9 +33,12 @@ cp -r llm-prof ~/.claude/skills/
 cp -r prof-analy ~/.claude/skills/
 cp -r ssh-docker ~/.claude/skills/
 cp -r remote-agent-config ~/.claude/skills/
+
+# Codex 用户级 skill
+cp -r reliable-task-execution ~/.codex/skills/
 ```
 
-安装后在 Claude Code 对话中触发对应关键词即可调用。
+安装后在对应 Agent 对话中触发关键词，或使用显式 skill 名称调用。
 
 > `remote-agent-config` 的 `sync.py` 会被 skill 按固定路径调用，请保持它与 `SKILL.md` 平级、不要单独挪动。
 
@@ -323,6 +327,32 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 
 ---
 
+## Skill 7: reliable-task-execution - 可靠任务执行
+
+### 功能
+
+为编码任务提供与范围和风险成比例的执行闭环：读取仓库规则、冻结目标和完成证据、选择 Quick / Standard / Extended 模式、分步实现与验证，并在缺少构建、集成或真实硬件证据时明确报告 `PARTIAL` 或 `BLOCKED`。
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| 自适应规划 | 小任务使用微计划，普通任务使用有序任务列表，复杂任务使用可恢复 Living Plan |
+| 风险前置 | 对不可检查的 native SDK、外部 API 或版本化接口，先获取正式合同或运行最小探针 |
+| 分层验证 | 区分源码存在、聚焦测试、回归、构建、集成、运行时注册和真实目标验证 |
+| 完成诚实性 | 规划使用 `PLAN_READY` / `PLANNING_BLOCKED`；实现使用 `COMPLETE` / `PARTIAL` / `BLOCKED` |
+| Eval 覆盖 | 包含 Quick、Standard、硬件依赖、已有计划、虚假完成和任务升级等测试场景 |
+
+### 调用示例
+
+```text
+$reliable-task-execution
+
+在 tecovllm 中实现一个 SDAA 自定义算子。先检查现有注册和构建模式；没有真实硬件证据时不要报告 COMPLETE。
+```
+
+---
+
 ## 项目结构
 
 ```
@@ -356,6 +386,11 @@ work-skills/
 ├── remote-agent-config/       # 远程 Agent 配置同步 skill
 │   ├── SKILL.md               # Skill 定义文件
 │   └── sync.py                # 推送脚本（须与 SKILL.md 平级）
+├── reliable-task-execution/   # 自适应规划、执行与证据验证 skill
+│   ├── SKILL.md
+│   ├── agents/openai.yaml
+│   ├── evals/evals.json
+│   └── references/
 └── ssh-docker/                # SSH Docker 远程工作流 skill
     └── SKILL.md
 ```

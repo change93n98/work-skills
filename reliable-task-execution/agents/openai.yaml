@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reliable Task Execution"
+  short_description: "Adaptively plan, execute, and verify coding tasks"
+  default_prompt: "Use $reliable-task-execution to complete this task with proportionate planning and evidence-based verification."
