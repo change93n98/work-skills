@@ -78,9 +78,30 @@ Inspect:
 - performance or resource measurements when required;
 - accidental scope expansion and unrelated changes.
 
+## Per-Workstream Verification
+
+When the request has multiple workstreams, verify and report each one separately before calculating an overall outcome. Each workstream must have:
+
+- its own acceptance conditions;
+- its own executed commands or collected artifacts;
+- a status of `COMPLETE`, `PARTIAL`, or `BLOCKED`;
+- explicit dependencies on evidence from another workstream.
+
+Do not let strong evidence from one workstream hide missing evidence in another. Correctness tests do not complete a performance-comparison workstream; benchmark numbers do not complete an implementation-correctness workstream.
+
+For before/after performance comparisons, require:
+
+- the same target identity, workload, input shapes/data, dtype, software build, timing boundary, warmup, and repetition policy unless a difference is the subject of the comparison;
+- baseline evidence collected or reproducibly preserved before optimization;
+- raw samples, not only the best run;
+- a stated aggregation method such as median plus mean/min/max;
+- throughput or domain metric and speedup/regression calculation;
+- noise, outliers, unsupported cases, and measurement limitations;
+- correctness passing before optimized results are promoted.
+
 ## Evidence Matrix
 
-Report evidence dimensions separately:
+Report evidence dimensions separately. For multiple workstreams, add a workstream column or keep one matrix per workstream:
 
 | Dimension | Allowed values | Evidence |
 | --- | --- | --- |
@@ -128,7 +149,7 @@ For implementation work, use exactly one user-facing outcome:
 
 ### COMPLETE
 
-Every mandatory acceptance condition has fresh matching evidence, the requested target is reconciled, and no required work remains.
+Every mandatory acceptance condition has fresh matching evidence, every mandatory workstream is complete, cross-workstream integration gates pass, the requested target is reconciled, and no required work remains.
 
 ### PARTIAL
 
@@ -149,13 +170,19 @@ For planning-only work, use `PLAN_READY` when the plan is executable and `PLANNI
 
 `COMPLETE | PARTIAL | BLOCKED` — <one-sentence result>
 
-## Changes
+## Workstream Results
 
-- <material change>
+### W1: <goal> — `COMPLETE | PARTIAL | BLOCKED`
+- Changes: <material change>
+- Verification: `<exact command or observation>` — <result>
 
-## Verification
+### W2: <goal> — `COMPLETE | PARTIAL | BLOCKED`
+- Changes or report: <material output>
+- Verification: `<exact command or observation>` — <result>
 
-- `<exact command or observation>` — <result and important counts>
+## Integration Verification
+
+- `<cross-workstream check>` — <result>
 
 ## Evidence Gaps
 

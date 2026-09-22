@@ -69,9 +69,22 @@ Orient a worker who is new to the task:
 
 Do not copy general manuals. Include only context that changes execution decisions.
 
+## Workstream Map
+
+If the request contains multiple independently verifiable outcomes, list them before the dependency graph. Each workstream owns one outcome and its evidence.
+
+```markdown
+| Workstream | Goal | Starts when | Complete when |
+| --- | --- | --- | --- |
+| W1 | <outcome> | <entry gate> | <acceptance summary> |
+| W2 | <outcome> | <entry gate> | <acceptance summary> |
+```
+
+Do not create a workstream for routine formatting, commits, or documentation unless the user requested it as an independent deliverable.
+
 ## Dependency Graph
 
-Describe what must exist before later work can proceed. Prefer a small diagram or ordered explanation. Identify shared interfaces that must be frozen before parallel implementation.
+Describe what must exist before later work can proceed, including dependencies between exact workstream steps. Prefer a small diagram or ordered explanation. Identify shared interfaces or benchmark contracts that must be frozen before downstream changes.
 
 ## Risks and Early Evidence
 
@@ -79,23 +92,56 @@ List the assumptions most likely to invalidate the approach. Convert each high-r
 
 When the work depends on a native SDK, external service, versioned schema, or undocumented interface that is not available for inspection, the first milestone must obtain the authoritative contract or run a minimal probe. Existing nearby usage proves that an API exists; it does not prove that different layouts, flags, devices, versions, or data shapes are equivalent.
 
-## Milestones and Tasks
+## Workstreams, Milestones, and Tasks
 
-Organize work into observable milestones. Each task should contain:
+Create a heading for each independently verifiable outcome. Within each workstream, write small ordered subgoals. Do not interleave steps from different workstreams in one flat list.
 
 ```markdown
-### Task <N>: <Observable outcome>
+## Workstream W1: <Observable outcome>
 
+**Goal:** <one outcome>
 **Requirements:** R1, R2
-**Depends on:** <task IDs or none>
+**Depends on:** <workstream step or gate, or none>
+
+### W1.1 <Small verifiable subgoal>
 **Change area:** <components or likely files>
-**Work:** <concrete implementation description>
-**Acceptance:** <requirement IDs plus any task-specific condition>
-**Verification:** <task-specific command or observation; do not repeat the whole final matrix>
+**Work:** <concrete action>
+**Acceptance:** <task-specific condition>
+**Verification:** <command or observation>
 **Failure / recovery:** <what to preserve, revert, or reassess>
+
+### W1.2 <Next subgoal>
+...
+
+**Workstream acceptance:** <conditions for W1 to be complete>
+**Workstream evidence:** <commands, measurements, or artifacts>
 ```
 
-Prefer vertical slices. Do not postpone all integration until the end. A task is too large when it cannot be independently implemented, verified, reviewed, and recovered from as one coherent outcome.
+Repeat for W2, W3, and so on. Prefer 2-5 meaningful steps per workstream rather than one giant step or many mechanical edits. A step should be small enough to verify or reject independently.
+
+When optimization and performance comparison are both requested, separate them:
+
+```markdown
+## Workstream W1: Implementation Optimization
+1. Inspect the current bottleneck and freeze correctness tests.
+2. Select and validate tile configuration.
+3. Improve data movement/coalescing and verify correctness.
+4. Add overlap or double buffering and verify correctness.
+5. Review the resulting implementation and supported shape contract.
+
+## Workstream W2: Before/After Performance Comparison
+1. Freeze device, shapes, dtype, warmup, repetitions, timing boundary, and metrics.
+2. Collect and preserve baseline samples before W1 changes performance behavior.
+3. Run optimized measurements under the identical contract after W1 passes correctness.
+4. Compute raw samples, median/mean/min/max, throughput, and speedup.
+5. Report regressions, noise, unsupported shapes, and the exact comparison boundary.
+```
+
+Prefer vertical slices inside each workstream. Do not postpone all integration until the end.
+
+## Integration and Final Reconciliation
+
+Define the cross-workstream gates and final ordering. State which workstream steps may run early, which require another workstream's acceptance, and what proves the original multi-goal request is complete. Overall `COMPLETE` requires every mandatory workstream to be complete and the integration gates to pass.
 
 ## Progress
 

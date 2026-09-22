@@ -14,8 +14,9 @@ Before editing:
 1. Read the applicable user instructions, `AGENTS.md` files, repository guidance, and nested-repository boundaries.
 2. Define the requested outcome, material non-goals, constraints, and evidence that would prove completion.
 3. Inspect the current implementation and relevant tests. Do not plan from filenames or assumptions alone.
-4. Select Quick, Standard, or Extended mode using scope, uncertainty, risk, reversibility, duration, dependencies, and verification cost.
-5. State a plan proportionate to the selected mode before making changes.
+4. Split the request into independently verifiable outcomes when it contains more than one goal. Give each outcome its own workstream before decomposing implementation steps.
+5. Select Quick, Standard, or Extended mode using scope, uncertainty, risk, reversibility, duration, dependencies, and verification cost.
+6. State a plan proportionate to the selected mode before making changes.
 
 During execution:
 
@@ -45,6 +46,44 @@ Record enough of the following to prevent silent goal changes:
 - **Completion evidence:** Commands or observations that would prove the outcome.
 
 Ask the user only when missing information materially changes the outcome, risk, or authorization and cannot be inferred safely. Otherwise state the assumption and proceed.
+
+## Split Multiple Outcomes into Workstreams
+
+Before writing a task list, determine whether the request contains multiple independently verifiable outcomes. Common signals include words such as “and”, distinct deliverables, different evidence types, or one goal that produces an artifact while another evaluates it.
+
+When multiple outcomes exist, create one numbered workstream per outcome. Do not flatten them into a single mixed sequence. Each workstream must contain:
+
+- **Goal:** the observable outcome owned by this workstream;
+- **Steps:** a short ordered list of concrete subgoals;
+- **Dependencies:** inputs or gates from other workstreams;
+- **Acceptance:** conditions that make this workstream complete;
+- **Verification:** commands, measurements, or artifacts that prove its result.
+
+After the workstreams, add an **Integration and Final Reconciliation** section describing cross-workstream ordering and the overall completion rule. A workstream may start before another finishes when its dependency allows it. For example, a performance-comparison workstream should freeze the benchmark contract and collect the baseline before optimization changes, then collect optimized measurements after the implementation workstream passes correctness.
+
+Use this compact shape:
+
+```markdown
+## Workstream 1: <outcome>
+Goal: ...
+1. <small verifiable step>
+2. <small verifiable step>
+Acceptance: ...
+Verification: ...
+
+## Workstream 2: <outcome>
+Goal: ...
+Depends on: Workstream 1 step 2
+1. ...
+2. ...
+Acceptance: ...
+Verification: ...
+
+## Integration and Final Reconciliation
+- <cross-workstream gate>
+```
+
+Do not create separate workstreams for incidental activities such as formatting or documentation unless they are explicit deliverables.
 
 ## Select a Mode
 
@@ -89,7 +128,7 @@ Extended means persistent and self-contained, not maximally verbose. Keep accept
 
 ## Plan and Execute
 
-Prefer vertical slices that deliver observable behavior over horizontal batches that postpone integration. Put high-risk assumptions and feasibility checks early enough to fail cheaply.
+Within each workstream, prefer vertical slices that deliver observable behavior over horizontal batches that postpone integration. Put high-risk assumptions and feasibility checks early enough to fail cheaply. Preserve the workstream headings during execution so progress does not collapse back into a mixed task list.
 
 For every task or milestone:
 

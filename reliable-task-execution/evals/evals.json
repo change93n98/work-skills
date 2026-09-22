@@ -97,6 +97,21 @@
         "Previously collected evidence is preserved but not overstated.",
         "The final verification contract includes build, integration, and hardware dimensions."
       ]
+    },
+    {
+      "id": 9,
+      "prompt": "优化 teco-matmul，并提供可信的优化前后性能对比数据。优化方向包括 tile 配置、访存搬运和双缓冲；性能对比要在远程 SDAA 节点执行。先输出并执行清晰计划。",
+      "expected_output": "Treats this as two independently verifiable workstreams rather than one mixed checklist. Workstream 1 decomposes implementation optimization into small ordered goals such as freezing correctness, tile configuration, data movement/coalescing, double buffering, and correctness review. Workstream 2 freezes the benchmark contract and collects the baseline before optimization, then runs identical optimized measurements, computes summary statistics/throughput/speedup, and reports limitations. A final integration gate requires both workstreams to pass.",
+      "files": [],
+      "assertions": [
+        "The plan has two explicitly named workstreams: implementation optimization and before/after performance comparison.",
+        "The optimization workstream contains small ordered subgoals for tile configuration, data movement or coalescing, double buffering or overlap, and correctness verification after meaningful changes.",
+        "The performance workstream freezes device, shapes, dtype, software build, timing boundary, warmup, repetitions, and metrics before collecting results.",
+        "Baseline samples are collected or reproducibly preserved before optimization changes, and optimized samples use the identical benchmark contract.",
+        "The comparison reports raw samples plus an aggregation such as median and mean/min/max, throughput, and speedup or regression.",
+        "Each workstream has its own acceptance criteria, verification, and status, followed by an integration and final reconciliation gate.",
+        "Correctness evidence and performance evidence are not treated as interchangeable."
+      ]
     }
   ]
 }

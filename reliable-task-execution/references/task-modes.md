@@ -27,6 +27,42 @@ Use **Extended** when any critical dimension is high, the work may cross session
 
 These are decision aids, not numeric scoring rules. A tiny authentication change can require Extended mode; a mechanical multi-file rename can remain Standard.
 
+## Multi-Outcome Decomposition
+
+Mode selection and outcome decomposition answer different questions:
+
+- **Mode** controls planning depth and persistence.
+- **Workstreams** separate independently verifiable outcomes.
+
+A Standard task can have two compact workstreams; an Extended task can have several persistent workstreams. Create separate workstreams when any of these are true:
+
+- the request asks for two or more deliverables that can pass or fail independently;
+- the goals require different evidence, such as implementation correctness versus performance comparison;
+- one goal must preserve a baseline before another goal changes the system;
+- different components, environments, or owners can advance independently;
+- reporting one goal as complete would still leave another user goal unfulfilled.
+
+Keep a single workstream when the apparent subgoals are merely sequential mechanics of one outcome. “Add a field and its regression test” is normally one workstream. “Optimize an operator and produce a controlled before/after performance report” is two workstreams.
+
+For every workstream:
+
+1. State one observable goal.
+2. Break it into ordered subgoals small enough to verify or reject independently.
+3. Record dependencies on exact steps or gates, not vague statements such as “after optimization”.
+4. Define workstream-specific acceptance and evidence.
+5. Add a final integration gate that reconciles all workstreams against the original request.
+
+For optimization plus benchmarking, use this dependency pattern:
+
+```text
+Workstream 2, steps 1-2: freeze benchmark contract and collect baseline
+    -> Workstream 1: implement optimization in correctness-preserving steps
+        -> Workstream 2, steps 3-5: measure optimized result, analyze, report
+            -> Final reconciliation
+```
+
+This prevents a modified benchmark, changed dataset, different device, or easier workload from being used as the “after” result.
+
 ## Mode Shapes
 
 ### Quick
@@ -49,15 +85,18 @@ Required behavior:
 
 ### Standard
 
-Plan shape:
+Plan shape for one outcome:
 
 ```markdown
-1. <observable task outcome>
-   - Depends on: <task or none>
+## Workstream 1: <observable outcome>
+1. <small verifiable step>
+   - Depends on: <step or none>
    - Acceptance: <testable condition>
    - Verify: <command or observation>
 2. ...
 ```
+
+Repeat the workstream block when the request contains multiple outcomes, then add a compact integration gate.
 
 Required behavior:
 
@@ -131,3 +170,4 @@ If work can proceed safely, state the assumption and keep it reversible.
 | Rewrite a scheduler to address an intermittent timeout with no reproduction | Extended | Direction and root cause are unproven |
 | Rename a private symbol across many files with comprehensive automated checks | Standard | Broad but mechanical and reversible |
 | Change one authorization condition | Extended | Small diff, high consequence |
+| Optimize an operator and produce a controlled before/after performance report | Extended | Two workstreams: hardware-dependent implementation and benchmark evidence |
