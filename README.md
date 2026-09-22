@@ -333,6 +333,8 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 
 ## Skill 7: reliable-task-execution - 可靠任务执行
 
+[详细安装、调用方式与场景示例](reliable-task-execution/README.md)
+
 ### 功能
 
 为框架/功能开发、Bug 定位修复、算子或 native 组件开发、性能优化等编码任务提供通用执行闭环：先识别独立目标并拆成 Workstream，再为每条工作流定义清晰的小目标、依赖、验收和验证；同时根据复杂度选择 Quick / Standard / Extended 模式。
@@ -460,6 +462,7 @@ work-skills/
 │   └── .gitignore
 ├── reliable-task-execution/   # 自适应规划、执行与证据验证 skill
 │   ├── SKILL.md
+│   ├── README.md              # 安装、调用和场景示例
 │   ├── agents/openai.yaml
 │   ├── evals/evals.json
 │   └── references/
