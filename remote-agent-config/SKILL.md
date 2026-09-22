@@ -32,16 +32,25 @@ then ask:
    - `指定节点` — 输入别名或 IP 均可，支持逗号分隔多个
    - `WSL 发行版` — `--list` 输出里 `wsl:<发行版>` 那几行；本机、不走 ssh，
      且只写 VS Code 扩展的配置（见下方 WSL 一节）
-2. **同步内容** — question text: `要同步哪份配置？`
+2. **同步内容** — question text: `要同步哪份配置？` **Ask this only when the
+   target includes at least one ssh host.** A WSL-only target skips it entirely:
+   the distro's own cc-switch already manages its `claude` CLI and its codex, so
+   the only thing worth writing there is the VS Code extension config, which is
+   rendered from the claude preset. Do not ask a codex question for a WSL-only
+   target — there is nothing to write.
    - `全部（claude + codex）` — 推荐
    - `仅 Claude`
    - `仅 Codex`
 3. **cc-switch 预设** — ask once per agent covered by step 2 (so `仅 Claude` asks
-   one question, `全部` asks two):
+   one question, `全部` asks two, and a **WSL-only target asks exactly one** —
+   Claude):
    - Claude: question text: `Claude 用哪个 cc-switch 预设？`
    - Codex: question text: `Codex 用哪个 cc-switch 预设？`
    - The first option is always `当前激活（<name>）`; then one option per remaining
      preset from `--list-providers`. Do not reorder or rename the presets.
+
+A WSL-only run is therefore **two** questions total: 节点 + Claude 预设. Do not
+walk the user through the ssh-shaped questions just because the flow has them.
 
 Then run sync.py with the answers, e.g.
 `--hosts 172.16.240.13 --targets claude --claude-provider DeepSeek`.
@@ -94,7 +103,12 @@ pick the same provider if you want them to agree. Reload the VS Code window for
 the extension to pick it up.
 
 `--wsl` never fans out to the ssh hosts: a run with `--wsl` and no `--hosts`
-targets the distro alone.
+targets the distro alone, and such a run syncs **claude only** — `--targets`
+defaults to `claude` there, since the extension config is the only thing a
+distro receives and it is rendered from the claude preset. Passing `--hosts`
+alongside `--wsl` restores the normal `all` default. The distro's `claude` CLI
+and its codex are left to the distro's own cc-switch; this skill has no business
+writing those.
 
 ### Choosing a preset
 

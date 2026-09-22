@@ -285,8 +285,10 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 调用时用 `question` 工具交互式询问（中文）：
 
 1. **节点选择**：全部节点，或指定别名 / IP（逗号分隔多个），或 WSL 发行版（`--list` 输出里的 `wsl:<发行版>` 那几行）
-2. **同步内容**：全部（claude + codex）/ 仅 Claude / 仅 Codex
+2. **同步内容**：全部（claude + codex）/ 仅 Claude / 仅 Codex —— **仅当目标含 ssh 节点时才问**。目标是 WSL 发行版时跳过：WSL 只写 VS Code 扩展配置，CLI 和 codex 交给发行版自己的 cc-switch
 3. **cc-switch 预设**：每个 agent 问一次，首项为「当前激活」，其后为该 agent 的其余预设
+
+所以纯 WSL 的运行只问 **两个**问题（节点 + Claude 预设），不会走一遍 ssh 那套题。对应的 `--wsl` 单独使用时 `--targets` 默认取 `claude`。
 
 ### 输出
 

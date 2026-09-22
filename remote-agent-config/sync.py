@@ -633,8 +633,9 @@ def text_equal(remote_text, desired_text):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hosts", help="comma-separated host aliases/IPs (default: all in ~/.ssh/config)")
-    ap.add_argument("--targets", choices=["all", "claude", "codex"], default="all",
-                    help="which agent config to sync (default: all)")
+    ap.add_argument("--targets", choices=["all", "claude", "codex"],
+                    help="which agent config to sync (default: all, or claude when the "
+                         "run targets WSL distros only)")
     ap.add_argument("--claude-provider",
                     help="cc-switch claude preset to sync (default: the current one)")
     ap.add_argument("--codex-provider",
@@ -659,6 +660,14 @@ def main():
     ap.add_argument("--list", action="store_true", help="list target hosts and exit")
     args = ap.parse_args()
 
+    # A WSL distro only ever receives the VS Code extension config, and that comes
+    # from the claude preset. So a WSL-only run defaults to claude rather than
+    # "all": rendering codex would be wasted work, and an official-login codex
+    # preset would abort the run over a target that has nothing to do with codex.
+    wsl_targets = [x.strip() for x in (args.wsl or "").split(",") if x.strip()]
+    if args.targets is None:
+        args.targets = "claude" if (wsl_targets and not args.hosts) else "all"
+
     do_claude = args.targets in ("all", "claude")
     do_codex = args.targets in ("all", "codex")
     do_vscode = do_claude and not args.no_vscode
@@ -667,7 +676,6 @@ def main():
         list_providers(args.targets, args.db)
         return
 
-    wsl_targets = [x.strip() for x in (args.wsl or "").split(",") if x.strip()]
     if wsl_targets and not do_claude:
         raise SystemExit("--wsl 写的是 VS Code 扩展的配置，来自 claude 预设，"
                          "单独指定 --targets codex 时没有可写的内容")
