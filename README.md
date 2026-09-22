@@ -274,6 +274,7 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 | 幂等推送 | 先比对远程已有内容（JSON 结构比较、TOML 归一化），一致则跳过且不写不备份；`--force` 强制重写 |
 | 安全 | 备份到 `<file>.bak-时间戳`，`chmod 600`；`--dry-run` 输出自动脱敏；拒绝推送 loopback `base_url` 和无 `base_url` 的官方登录型预设 |
 | WSL 目标 | `--wsl <发行版>` 把 VS Code 扩展配置写进本机 WSL：文件走 `\\wsl.localhost` 共享直读写，`chmod` 走 `wsl.exe`，**不用在 WSL 里装 sshd**；只写 `Machine/settings.json`，CLI 那份留给发行版自己的 cc-switch |
+| 逐目标覆盖 env | `--env KEY=VALUE`（可重复）覆盖 claude 的 env 条目，用于必须按目标区分的值——典型是 `ANTHROPIC_CUSTOM_HEADERS` 里的 session 标识；手改文件不生效，下次同步会重写该字段 |
 
 ### 触发词
 

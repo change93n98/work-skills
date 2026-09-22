@@ -651,6 +651,9 @@ def main():
     ap.add_argument("--force", action="store_true", help="re-write even when the remote is already up to date")
     ap.add_argument("--no-vscode", action="store_true", help="do not touch VS Code Machine settings")
     ap.add_argument("--include-hooks", action="store_true", help="keep Claude hooks (may fail remotely)")
+    ap.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                    help="override a claude env entry (repeatable). Use it for values that "
+                         "must differ per target, e.g. ANTHROPIC_CUSTOM_HEADERS's session name")
     ap.add_argument("--allow-loopback", action="store_true",
                     help="permit base_url pointing at 127.0.0.1/localhost (normally refused)")
     ap.add_argument("--list", action="store_true", help="list target hosts and exit")
@@ -704,7 +707,16 @@ def main():
                 + (" (current)" if prov["is_current"] else ""))
             live = build_claude() if args.include_hooks and CLAUDE_SRC.exists() else None
             claude = render_claude(prov, include_hooks=args.include_hooks, live=live)
-        env = claude.get("env", {})
+        # Overrides land on the rendered settings *before* the loopback check and
+        # before env_list is derived, so one flag covers both the file and the
+        # VS Code Machine settings. In-place: `env` is the dict inside `claude`.
+        env = claude.setdefault("env", {})
+        for item in args.env:
+            if "=" not in item:
+                raise SystemExit(f"--env 需要 KEY=VALUE 形式: {item!r}")
+            k, v = item.split("=", 1)
+            env[k.strip()] = v
+            log(f"env override: {k.strip()}")
         env_list = [{"name": k, "value": v} for k, v in env.items()]
     if do_codex:
         if args.from_live:

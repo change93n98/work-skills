@@ -157,6 +157,7 @@ python3 "$S"                              # all enabled Hosts, both agents, curr
 python3 "$S" --force                      # re-write even if up to date
 python3 "$S" --exclude 219.145.122.226    # skip the jump box
 python3 "$S" --wsl <发行版>                # WSL: VS Code extension config only (Windows only)
+python3 "$S" --env ANTHROPIC_MODEL=deepseek-v4-pro   # override one claude env entry (repeatable)
 python3 "$S" --no-vscode                  # skip Machine/settings.json
 python3 "$S" --from-live                  # legacy: read live files, not presets
 python3 "$S" --db /path/to/cc-switch.db   # alternate database
@@ -200,8 +201,13 @@ reachable upstream, or pass `--allow-loopback` if you really mean it.
   windows-cc-switch`, a laptop-side identity. Nodes that share a network home
   will collide on it; set a per-node value in the remote file if that matters.
   This bites a WSL target too: the Windows preset would label the distro's
-  extension `windows-cc-switch` while its CLI carries its own name, so give WSL
-  a per-distro value (e.g. `wsl-<distro>`) if that distinction matters.
+  extension `windows-cc-switch` while its CLI carries its own name. Fix it with
+  `--env` rather than by editing the file — the next sync rewrites that field:
+
+  ```bash
+  python3 "$S" --wsl <发行版> --targets claude \
+    --env "ANTHROPIC_CUSTOM_HEADERS=x-opencode-session: wsl-<发行版>"
+  ```
 - `--wsl` needs Windows (it uses `wsl.exe` and the `\\wsl.localhost` share).
   Running the skill inside WSL itself cannot reach another distro this way.
 - After changing `~/.vscode-server/data/Machine/settings.json`, the user must
