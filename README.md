@@ -8,6 +8,7 @@ Claude Code 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)** 平台�
 |-------|------|
 | [blas-compare](#skill-1-blas-compare---gemm-性能对比) | 在容器内对比基线 / 优化后 rocBLAS 的 GEMM 性能，自动采集 GFLOPS 与耗时并生成对比表 |
 | [blaslt-compare](blaslt-compare/SKILL.md) | hipBLASLt GEMM 性能对比：批量执行 `hipblaslt-bench`，采集 GFLOPS、耗时与 kernel 名称 |
+| [cc-switch-claude-401](#skill-6-cc-switch-claude-401---claude-cli-401-排障) | 修复 cc-switch 启动的 Claude CLI 报 401 / 密钥冲突警告：定位失效 key，把 token 归位到正确的认证字段 |
 | [install-vscode-server](install-vscode-server/SKILL.md) | 在远程容器 / 服务器内快速安装 VS Code Server，绕过 Remote 连接时的慢速自动下载 |
 | [llm-prof](#skill-2-llm-prof---大模型推理-profiling-分析) | 启动 vLLM / SGLang 服务跑 bench profiling，分析 trace 输出 prefill / decode 算子耗时汇总表 |
 | [prof-analy](#skill-3-prof-analy---模型性能分析) | 解析 PyTorch profiling trace，按算子类别（gemm / attention / conv 等）汇总耗时并生成报告 |
@@ -25,6 +26,7 @@ Claude Code 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)** 平台�
 ```bash
 cp -r blas-compare ~/.claude/skills/
 cp -r blaslt-compare ~/.claude/skills/
+cp -r cc-switch-claude-401 ~/.claude/skills/
 cp -r install-vscode-server ~/.claude/skills/
 cp -r llm-prof ~/.claude/skills/
 cp -r prof-analy ~/.claude/skills/
@@ -282,6 +284,45 @@ python3 ~/.claude/skills/prof-analy/analyze.py /path/to/trace.json -o output.xls
 
 ---
 
+## Skill 6: cc-switch-claude-401 - Claude CLI 401 排障
+
+### 功能
+
+修复 cc-switch 启动的 Claude CLI 报 401（Invalid/Missing API key）或启动警告 `Both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY set`。核心是理清 Claude Code 的认证头由**变量名**决定：token 放 `ANTHROPIC_API_KEY` 发 `x-api-key: <token>`，放 `ANTHROPIC_AUTH_TOKEN` 发 `Authorization: Bearer <token>`；两变量并存时优先用 `ANTHROPIC_API_KEY` 并打警告。cc-switch 的 OpenCode 渠道（`https://opencode.ai/zen/go`）只认 `x-api-key` 头，token 放错字段即 401。
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| 报错速查 | 三种 401 场景对照病因与修法：双 key 冲突 / 认证头不对 / key 真失效 |
+| 双处同步 | cc-switch.db 的 `settings_config` 与 `~/.claude/settings.json` 必须一起改；只改库不改文件，CLI 照样 401 |
+| 实测优先 | 用 `curl` 分别试 `x-api-key` 与 `Bearer` 两种头，确认哪把 key 有效、该放哪个字段，不靠猜 |
+| 残留清理 | 用旧 key 前缀 grep 全部 claude 配置，确认新旧 key 没有各占一个字段 |
+
+### 报错 → 病因速查
+
+| 报错 / 现象 | 病因 | 修法 |
+|---|---|---|
+| 401 "Invalid API key" + `Both ... set` 警告 | 两个变量都有值，优先用的 `ANTHROPIC_API_KEY` 是失效旧 key | 删失效 key，有效 token 归位到正确字段 |
+| 401 "Missing API key"，无警告 | 只剩 `AUTH_TOKEN`，但端点只认 `x-api-key` 头 | token 移到 `ANTHROPIC_API_KEY` 字段 |
+| 其他 401 且端点非 opencode zen | token 本身失效，或 `base_url` 错 | 找发 token 的渠道重新要 key |
+
+### 触发词
+
+`cc-switch 401`、`Claude 401`、`Invalid API key`、`Missing API key`、`Both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY set`、`密钥冲突`、`auth may not work as expected`
+
+### 输入
+
+报错信息或现象描述。skill 会引导检查四处：报错标题里的临时配置文件、`~/.claude/settings.json` 的 `env` 段、`~/.cc-switch/cc-switch.db` 的 `providers` 表、`curl` 实测结果。
+
+### 输出
+
+- 病因判定（对照速查表）
+- 删失效 key / token 字段归位后的 `~/.claude/settings.json` 与 cc-switch.db（改库前需先关 cc-switch 进程，防退出时内存态覆盖）
+- 验证结论：重开 CLI 无警告、对话正常
+
+---
+
 ## 项目结构
 
 ```
@@ -290,6 +331,8 @@ work-skills/
 ├── blas-compare/              # BLAS GEMM 性能对比 skill
 │   └── SKILL.md
 ├── blaslt-compare/            # hipBLASLt GEMM 性能对比 skill
+│   └── SKILL.md
+├── cc-switch-claude-401/      # cc-switch Claude CLI 401 排障 skill
 │   └── SKILL.md
 ├── install-vscode-server/     # 远程快速安装 VS Code Server skill
 │   └── SKILL.md
@@ -342,6 +385,13 @@ pip install torch transformers vllm
 - OpenSSH 客户端（`ssh` / `scp`）
 - 本机已安装 cc-switch（读取 `~/.cc-switch/cc-switch.db` 的 `providers` 表）；没有 cc-switch 时可用 `--from-live` 直读生效文件
 - 远程节点: 无需任何依赖，只落配置文件
+
+### cc-switch-claude-401 依赖
+
+- Python 3（标准库 `sqlite3` / `json`，无需额外 pip 包）
+- `curl`（实测 key 有效性与认证头类型）
+- 本机已安装 cc-switch（读写 `~/.cc-switch/cc-switch.db`；改库前须先关 cc-switch 进程）
+- 仅适用 Windows 上由 cc-switch 启动的 Claude CLI
 
 ---
 
