@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# gpu-container-lookup.sh — 查询远程节点上"哪张加速卡被哪个容器占用"
-# 对应技能 gpu-container-lookup（../SKILL.md）：卡 -> 占用进程 PID -> 反查容器名。
+# who-use-gpu.sh — 查询远程节点上"哪张加速卡被哪个容器占用"
+# 对应技能 who-use-gpu（../SKILL.md）：卡 -> 占用进程 PID -> 反查容器名。
 #
 # 用法:
-#   gpu-container-lookup.sh <节点IP或ssh别名> [卡Index ...]
+#   who-use-gpu.sh <节点IP或ssh别名> [卡Index ...]
 #
 # - 节点给 ssh 别名最好（自动携带 Port/ProxyJump/IdentityFile）；给裸 IP 时会到
 #   ~/.ssh/config 里找匹配的 Host 别名（如 192.167.252.35 -> sdaa-192.167.252.35）。
@@ -17,11 +17,11 @@ set -u
 
 usage() {
   cat >&2 <<'EOF'
-用法: gpu-container-lookup.sh <节点IP或ssh别名> [卡Index ...]
+用法: who-use-gpu.sh <节点IP或ssh别名> [卡Index ...]
 示例:
-  gpu-container-lookup.sh sdaa-192.167.252.35 2 3   # tc35 的卡 2、3
-  gpu-container-lookup.sh 192.167.252.34           # tc34 全部卡（裸IP自动匹配别名）
-  gpu-container-lookup.sh 172.16.240.15 0          # H100 节点（经跳板机）
+  who-use-gpu.sh sdaa-192.167.252.35 2 3   # tc35 的卡 2、3
+  who-use-gpu.sh 192.167.252.34           # tc34 全部卡（裸IP自动匹配别名）
+  who-use-gpu.sh 172.16.240.15 0          # H100 节点（经跳板机）
 EOF
   exit 2
 }

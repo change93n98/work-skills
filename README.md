@@ -9,7 +9,7 @@ Claude Code / Codex 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)**
 | [blas-compare](#skill-1-blas-compare---gemm-性能对比) | 在容器内对比基线 / 优化后 rocBLAS 的 GEMM 性能，自动采集 GFLOPS 与耗时并生成对比表 |
 | [blaslt-compare](blaslt-compare/SKILL.md) | hipBLASLt GEMM 性能对比：批量执行 `hipblaslt-bench`，采集 GFLOPS、耗时与 kernel 名称 |
 | [cc-switch-claude-401](#skill-6-cc-switch-claude-401---claude-cli-401-排障) | 修复 cc-switch 启动的 Claude CLI 报 401 / 密钥冲突警告：定位失效 key，把 token 归位到正确的认证字段 |
-| [gpu-container-lookup](#skill-8-gpu-container-lookup---加速卡占用反查) | 反查「节点 X 的物理卡 N 被哪个容器占用」：卡 → 占用进程 PID → `docker top` / cgroup 定位容器名 |
+| [who-use-gpu](#skill-8-who-use-gpu---加速卡占用反查) | 反查「节点 X 的物理卡 N 被哪个容器占用」：卡 → 占用进程 PID → `docker top` / cgroup 定位容器名 |
 | [install-vscode-server](install-vscode-server/SKILL.md) | 在远程容器 / 服务器内快速安装 VS Code Server，绕过 Remote 连接时的慢速自动下载 |
 | [llm-prof](#skill-2-llm-prof---大模型推理-profiling-分析) | 启动 vLLM / SGLang 服务跑 bench profiling，分析 trace 输出 prefill / decode 算子耗时汇总表 |
 | [prof-analy](#skill-3-prof-analy---模型性能分析) | 解析 PyTorch profiling trace，按算子类别（gemm / attention / conv 等）汇总耗时并生成报告 |
@@ -30,7 +30,7 @@ Claude Code / Codex 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)**
 cp -r blas-compare ~/.claude/skills/
 cp -r blaslt-compare ~/.claude/skills/
 cp -r cc-switch-claude-401 ~/.claude/skills/
-cp -r gpu-container-lookup ~/.claude/skills/
+cp -r who-use-gpu ~/.claude/skills/
 cp -r install-vscode-server ~/.claude/skills/
 cp -r llm-prof ~/.claude/skills/
 cp -r prof-analy ~/.claude/skills/
@@ -369,7 +369,7 @@ $reliable-task-execution
 
 ---
 
-## Skill 8: gpu-container-lookup - 加速卡占用反查
+## Skill 8: who-use-gpu - 加速卡占用反查
 
 ### 功能
 
@@ -379,14 +379,14 @@ $reliable-task-execution
 
 | 特性 | 说明 |
 |------|------|
-| 固化脚本 | `scripts/gpu-container-lookup.sh` 一次跑完：裸 IP → `~/.ssh/config` 别名、卡型探测、PID 反查、结论行 + 证据表；脚本异常时回落到 SKILL.md 的手工步骤 |
+| 固化脚本 | `scripts/who-use-gpu.sh` 一次跑完：裸 IP → `~/.ssh/config` 别名、卡型探测、PID 反查、结论行 + 证据表；脚本异常时回落到 SKILL.md 的手工步骤 |
 | 双卡型 | 太初（`teco-smi`）与 NVIDIA（`nvidia-smi`，用 `gpu_uuid` 把进程对回卡 index） |
 | 反查双路 | `docker top` 为主，`/proc/<PID>/cgroup` 兜底（兼容 cgroup v1 / v2 / containerd）；docker 权限不足自动降级 `sudo -n` |
 | 三态结论 | busy / idle（显存空）/ stuck（无进程但显存未释放），把「显存泄漏」和「真空闲」区分开 |
 
 ### 触发词
 
-`哪张卡被占`、`卡反查容器`、`GPU 占用`、`卡的使用情况`、`物理卡 N 是谁`、`gpu-container-lookup`
+`哪张卡被占`、`卡反查容器`、`GPU 占用`、`卡的使用情况`、`物理卡 N 是谁`、`who-use-gpu`
 
 ### 输入
 
@@ -415,7 +415,7 @@ SSH 到远程加速卡节点，**检查 / 复用 / 创建并验证 Docker 开发
 | 三卡型分支 | 太初（`teco-smi`、`/dev/tcaicard*`、官方 tar 镜像）／NVIDIA（`--gpus`、NGC 镜像）／昇腾·寒武纪通用兜底（试验性） |
 | 驱动-镜像匹配 | 按宿主 TecoDriver 版本对照兼容表选 TecoToolKit 镜像；容器与宿主驱动版本必须一致，对不上先换镜像不硬建 |
 | 容内验证 | `import torch_sdaa` / `torch.cuda.is_available()` + `teco-smi -c` 卡健康；失败按排查顺序如实报卡点，不伪造「看起来成功」 |
-| 边界清晰 | 到「容器就绪并验证通过」为止；卡占用反查让位给 `gpu-container-lookup`，跑实验交给下游 skill |
+| 边界清晰 | 到「容器就绪并验证通过」为止；卡占用反查让位给 `who-use-gpu`，跑实验交给下游 skill |
 
 ### 触发词
 
@@ -444,10 +444,10 @@ work-skills/
 │   └── SKILL.md
 ├── cc-switch-claude-401/      # cc-switch Claude CLI 401 排障 skill
 │   └── SKILL.md
-├── gpu-container-lookup/      # 加速卡占用反查 skill
+├── who-use-gpu/      # 加速卡占用反查 skill
 │   ├── SKILL.md
 │   └── scripts/
-│       └── gpu-container-lookup.sh
+│       └── who-use-gpu.sh
 ├── install-vscode-server/     # 远程快速安装 VS Code Server skill
 │   └── SKILL.md
 ├── llm-prof/                  # 大模型推理 Profiling 分析 skill
@@ -516,7 +516,7 @@ pip install torch transformers vllm
 - 本机已安装 cc-switch（读写 `~/.cc-switch/cc-switch.db`；改库前须先关 cc-switch 进程）
 - 仅适用 Windows 上由 cc-switch 启动的 Claude CLI
 
-### gpu-container-lookup 依赖
+### who-use-gpu 依赖
 
 - bash 4.4+（脚本用关联数组）+ OpenSSH 客户端
 - 远程节点: `docker`（权限不足时脚本自动降级 `sudo -n`）、`teco-smi` 或 `nvidia-smi`

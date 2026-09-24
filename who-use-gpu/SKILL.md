@@ -1,5 +1,5 @@
 ---
-name: gpu-container-lookup
+name: who-use-gpu
 description: 查询远程节点上"哪张加速卡被哪个容器占用"。当用户问"XX节点占用物理卡N的容器叫什么"、"谁占用了某张卡"、"GPU/卡 反查容器"、"某节点卡的使用情况/哪张卡在用"时使用；支持太初卡节点（teco-smi，/dev/tcaicard*）和 NVIDIA 节点（nvidia-smi）两类，自动 SSH、按卡找进程 PID、用 docker top 反查容器名。用户没给节点 IP 时必须先询问节点 IP。
 ---
 
@@ -12,12 +12,12 @@ description: 查询远程节点上"哪张加速卡被哪个容器占用"。当�
 ## 0. 优先跑脚本
 
 本技能已固化为脚本。**脚本路径要相对本 SKILL.md 所在目录解析**，不要写
-`scripts/gpu-container-lookup.sh` 这种相对当前工作目录的路径——技能被调用时
+`scripts/who-use-gpu.sh` 这种相对当前工作目录的路径——技能被调用时
 CWD 是用户项目目录，那样写必然找不到文件：
 
 ```bash
-S="<本 SKILL.md 所在目录>"   # 如 ~/.claude/skills/gpu-container-lookup
-bash "$S/scripts/gpu-container-lookup.sh" <节点IP或ssh别名> [卡Index ...]
+S="<本 SKILL.md 所在目录>"   # 如 ~/.claude/skills/who-use-gpu
+bash "$S/scripts/who-use-gpu.sh" <节点IP或ssh别名> [卡Index ...]
 ```
 
 脚本自动完成：裸 IP 匹配 ~/.ssh/config 别名、探测卡型（teco/nvidia）、按卡找进程
