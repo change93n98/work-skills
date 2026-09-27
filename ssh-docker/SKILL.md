@@ -1,9 +1,25 @@
 ---
 name: ssh-docker
-description: Run remote compile, test, profiling, and debug tasks through SSH plus docker exec. Prompts for target node (IP or hostname from ~/.ssh/config) and Docker container name on invocation. Keeps code edits local and synced to remote.
+description: Run remote compile, test, profiling, and debug tasks through SSH plus docker exec. Prompts for target node (IP or hostname from ~/.ssh/config) and Docker container name on invocation. Keeps code edits local and synced to remote. For discovering which containers exist, starting long-running jobs, or checking task progress and results, use the remote-dev skill instead.
 ---
 
 # SSH Docker Remote Workflow
+
+## Scope and Handoff
+
+This skill owns the **local-edit → sync → run-in-container** loop, with concrete templates for
+compile / test / profiling / debug. Two things it deliberately does not own:
+
+- **Which node, which container.** Don't ask the user blind. Use the `remote-dev` skill: it
+  enumerates hosts from `~/.ssh/config`, probes card type / driver / mounts, and answers
+  "which containers exist / which are mine". Feed its output into this skill's parameters —
+  node alias → `SSH_TARGET`, container name → `DOCKER_NAME`, container workspace → `CONTAINER_REPO`.
+  Steps 1–3 below are the fallback for when `remote-dev` is unavailable.
+- **Long-running tasks and their progress.** Starting a training/eval job, watching it, and
+  reporting status/results is `remote-dev`'s job. This skill is for short, synchronously observed
+  commands: compile checks, unit tests, a quick profile.
+
+If the request is "start X on node Y and keep an eye on it", that is the `remote-dev` path.
 
 ## Execution Contract
 
@@ -87,9 +103,17 @@ After gathering, you should have:
 
 ## Windows SSH Reliability Notes
 
+**Prefer the alias form.** `ssh <alias>` / `scp <alias>:...` reads `~/.ssh/config`, which carries
+`Port`, `ProxyJump` and `IdentityFile` for that host automatically. The `-F NUL ... -p ... -i ...`
+form spelled out in the examples below bypasses `~/.ssh/config` **entirely** — so on a host that is
+only reachable through a jump host, or that listens on a non-standard port, it fails outright with
+no useful error. Use `-F NUL` only when local config ACLs are actually broken *and* the target needs
+no jump host and no custom port; otherwise fix the ACLs and keep using the alias.
+
 On Windows, local OpenSSH config or ACLs can break authentication before the remote host is even reached.
 
-- Prefer `ssh -F NUL ...` and `scp -F NUL ...` when you want to ignore local `~/.ssh/config`.
+- Prefer `ssh -F NUL ...` and `scp -F NUL ...` when you want to ignore local `~/.ssh/config`
+  (see the caveat above — this drops `ProxyJump`/`Port`/`IdentityFile`).
 - If OpenSSH reports bad permissions on `~/.ssh/config`, either fix the ACLs or bypass the config with `-F NUL`.
 - If OpenSSH reports bad permissions on the private key, create a temporary copy with restricted ACLs and use that copy for this session.
 
