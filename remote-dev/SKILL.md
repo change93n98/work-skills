@@ -1,264 +1,233 @@
 ---
 name: remote-dev
-description: SSH 到远程加速卡节点，检查/复用/创建并验证 Docker 开发容器。当用户说"开个开发容器"、"在XX节点建容器/进容器"、"没有容器就建一个"、"准备远程开发环境"、"XX节点有哪些容器/开发容器"时使用；用户一提到具体节点就直接连上去摸底执行，不要反问等确认；支持太初卡节点（teco-smi，/dev/tcaicard*，官方 tar 镜像）、NVIDIA 节点（nvidia-smi，NGC 镜像，--gpus）和未识别卡型的通用兜底；节点信息从 ~/.ssh/config 读取，只有用户完全没提节点时才列别名让用户选。只负责容器环境就绪与验证，不负责跑实验。
+description: 在 ~/.ssh/config 里的任意远程节点上准备/复用 Docker 开发容器，并在容器内执行任务、盯进度、取结果状态。当用户说"开个开发容器"、"XX节点建容器/进容器"、"准备远程开发环境"、"XX节点有哪些容器/我的容器"、"在XX节点跑/起个任务"、"看下任务进度/跑到哪了/完成了没"、"结果在哪/精度多少"、"VS Code 怎么连这个节点/远程开发"时使用；用户提到节点就直接连上去摸底执行，不要反问等确认；节点从 ~/.ssh/config 动态读取，不维护固定清单，只有用户完全没提节点时才列别名让用户选。
 ---
 
-# 节点开发容器：检查 / 创建 / 进入
+# 远程节点：容器准备 / 执行 / 盯进度
 
-目标：把"本地开发、远程容器里验证运行"的环境准备好——在指定节点上确保有一个
-可用的开发容器（有则复用/启动，没有则创建），并在容器内验证加速卡可用。
-思路：拿到节点就连接 → 摸底（卡型/驱动/docker/现有容器/空闲卡）→ 选容器
-或建容器 → 容器内验证 → 给出进入方式。
+目标：本机 agent 一路走到底——在用户指定的节点上准备好容器（有则复用/启动，没有则建），
+在容器内把任务跑起来，盯住进度，给出结果与状态。
+**节点上绝大多数任务都在 docker 内跑**，所以一切以容器为单位，宿主只做摸底与 docker 操作。
 
-不要靠 `docker inspect` 的设备映射判断卡的归属——实际节点上的容器几乎全是
-privileged 且 `Devices` 为空；查占用关系请用 gpu-container-lookup skill。
+两条硬规则：
 
-## 1. 执行原则：说到就干
+1. **不写死节点**。节点清单的唯一来源是 `~/.ssh/config`；卡型、驱动、docker、挂载、
+   存储共享关系全部连上去现探。skill 里不保存任何节点名、端口、跳板机、路径、用户名的既定事实。
+2. **探测驱动分支**。太初 / NVIDIA / 其他兜底三套建容器模板由摸底结果决定用哪套，
+   不是由节点叫什么决定。
 
-- **用户提到具体节点 → 直接连上去执行**，不要反问"要连吗/查什么"。摸底全是
-  只读操作，先把事实拿回来再汇报；执行动作（建容器、启停容器）只影响用户
-  自己目标的资源，默认直接做，做完如实汇报。
-- 只有两种情况才提问：
-  1. 用户完全没提节点 → 从 `~/.ssh/config` 列 Host 别名问一次（AskUserQuestion
-     最多 4 个选项，别名多时在消息里列全表让用户挑）。
-  2. 要**新建**容器但缺关键参数（镜像、挂载路径）→ 把摸底结论（空闲卡、现成
-     镜像、驱动版本）连同默认建议一起，**一次性**问完，让用户能直接确认。
-- 容器名/类型不用开局就问：摸底结果里通常能对出来；卡号口径：监控工具的
-  Index 从 **0** 开始（teco-smi 的 Index 1 = 第二张物理卡），回答时同时给出
-  Bus-Id 和 Index 避免歧义。
+分册（按需读，不要一开始全读）：
 
-## 2. 连接节点
+- 建容器三套模板、镜像匹配与导入、容器内验证细节：`references/create-containers.md`
+- 执行/监控命令集、进度判定表、增量测速、结果读取实例：`references/exec-and-monitor.md`
 
-1. 先在 `~/.ssh/config` 里 grep 该 IP 找 Host 块，用**别名**连接（别名自动携带
-   Port/ProxyJump/IdentityFile；sdaa 集群端口是 65056，H100 节点要经跳板机，裸 IP 直连会失败）。
-2. 找不到别名才用 `ssh -o BatchMode=yes -o ConnectTimeout=15 <ip>` 兜底。
-3. 若 `~/.ssh/config` 仍保留 `RemoteForward 15721`，stderr 可能出现
-   `Warning: remote port forwarding failed for listen port 15721`，属正常，忽略即可。
+## 0. 执行原则：说到就干
 
-## 3. 摸底节点
+- 用户提到节点 → 直接连上去执行，不要反问"要连吗/查什么"。摸底全是只读操作，先把事实拿回来再汇报。
+- 执行类动作（起任务、建容器、启停容器）只影响用户自己的目标资源，默认直接做，做完如实汇报。
+- 只在两种情况提问：① 用户完全没提节点；② 要新建容器但缺关键参数（镜像、挂载路径）——
+  把摸底结论（空闲卡、现成镜像、驱动版本）连同默认建议**一次性**问完。
+- 容器名/类型不用开局就问：摸底结果里通常能对出来。
 
-一条命令探完卡型、docker、现有容器：
+## 1. 解析节点（不写死）
+
+唯一来源 `~/.ssh/config`。枚举别名（跳过注释行与通配符）：
+
+```bash
+grep -iE "^[[:space:]]*Host[[:space:]]+" ~/.ssh/config \
+  | awk '{for(i=2;i<=NF;i++) print $i}' | grep -v '[*?]'
+```
+
+- 用户给了 IP 或别名 → 先在 config 里找对应 Host 块，**用别名连接**。别名自动携带
+  Port / ProxyJump / IdentityFile；裸 IP 直连会漏掉端口与跳板机。
+- 找不到别名才兜底：`ssh -o BatchMode=yes -o ConnectTimeout=15 <ip>`。
+- 用户完全没给节点 → 把别名列成文本表让用户挑。**用文本列出，不要用四选项弹窗**：
+  节点数常超过 4 个，弹窗还会挡住对话。
+- 需要复核有效参数：`ssh -G <别名> | grep -iE "^(hostname|port|user|proxyjump)"`。
+- 连接时 stderr 若出现 `Warning: remote port forwarding failed for listen port 15721`，
+  属正常（config 里残留的 `RemoteForward` 所致），忽略即可，不要当成连接失败。
+
+## 2. 摸底节点（一条命令拿全）
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> '
-  echo "=== 卡型探测 ==="; command -v nvidia-smi; command -v teco-smi; ls /opt/tecoai/bin/teco-smi 2>/dev/null
+  echo "=== 卡型 ==="; command -v nvidia-smi; command -v teco-smi; ls /opt/tecoai/bin/teco-smi 2>/dev/null
   echo "=== docker ==="; docker --version 2>&1
-  echo "=== 现有容器 ==="; docker ps -a --format "table {{.Names}}\t{{.Image}}\t{{.Status}}" 2>&1 | head -40
+  echo "=== 身份 ==="; whoami; echo "$HOME"
+  echo "=== 容器 ==="; docker ps -a --format "table {{.Names}}\t{{.Image}}\t{{.Status}}" 2>&1 | head -40
+  echo "=== 宿主在跑的重活 ==="; ps -eo pid,etime,pcpu,args --sort=-pcpu 2>/dev/null | head -12
 '
 ```
 
-- `docker ps` 报 `permission denied` → 改用 `sudo -n docker ...` 重试，后续所有
-  docker 命令都带 `sudo -n`。
+- `whoami` / `$HOME` 用于后面拼路径和判断归属，**不要预设用户名**。
+- `docker ps` 报 `permission denied` → 改 `sudo -n docker ...`，后续都带 `sudo -n`。
 - 节点没装 docker → 属宿主机管理操作，报告并停止，不要代装。
 
-再按卡型查占用概览（给用户建议空闲卡）：
-
-**太初节点**：
+再按探测到的卡型查占用与驱动（挑一个分支，别两个都跑）：
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> '/opt/tecoai/bin/teco-smi 2>&1 | head -80'
+# 太初系（teco-smi 存在时）
+ssh <别名> '/opt/tecoai/bin/teco-smi 2>&1 | head -80'
+ssh <别名> '/opt/tecoai/bin/teco-smi --query-device driver_version --format csv -i 0 2>&1; dpkg -l 2>/dev/null | grep -i tecodriver || rpm -qa 2>/dev/null | grep -i tecodriver'
+
+# NVIDIA（nvidia-smi 存在时）
+ssh <别名> 'nvidia-smi --query-gpu=index,name,memory.used,memory.total,driver_version --format=csv,noheader; docker info 2>/dev/null | grep -i nvidia; command -v nvidia-ctk'
 ```
 
-Permission denied 再试 `sudo -n`。记下各卡显存占用（低占用的卡即空闲）。
-同时查宿主 TecoDriver 版本（后面选镜像要用）：
+卡号口径：监控工具 Index 从 **0** 开始（teco-smi 的 Index 1 = 第二张物理卡），
+回答时同时给 Bus-Id 和 Index 避免歧义。
+
+**挂载与归属**（用到时再查，不需要每次都查）：
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> '/opt/tecoai/bin/teco-smi --query-device driver_version --format csv -i 0 2>&1; dpkg -l 2>/dev/null | grep tecodriver || rpm -qa 2>/dev/null | grep tecodriver'
+# 容器内路径 ↔ 宿主路径——汇报路径时必须两边都给
+docker inspect -f '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' <容器名>
+
+# "哪些容器是我的"——docker 不记录创建者，靠两处对齐推断：
+#   a) 容器名带用户名前缀   b) 挂载路径落在该用户目录下（$HOME 或集群的用户目录）
+for c in $(docker ps -a --format '{{.Names}}'); do
+  printf '%-28s %s\n' "$c" "$(docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' $c \
+    | tr ' ' '\n' | grep -oE "/(home|data|mnt|sdata|nfsdata)/[a-z0-9_.-]+" | sort -u | tr '\n' ',')"
+done
 ```
 
-**NVIDIA 节点**：
+归属结论要标注是**推断**（命名前缀 + 挂载点两处对上才可信），不要当成 docker 记录的创建者。
+
+**存储是否跨节点共享**（决定"这个路径能不能在别的节点上直接看"）：
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'nvidia-smi --query-gpu=index,name,memory.used,memory.total,driver_version --format=csv,noheader; docker info 2>/dev/null | grep -i nvidia; command -v nvidia-ctk'
+ssh <别名> 'df -h <路径>; findmnt -no SOURCE,FSTYPE <路径>; hostname'
 ```
 
-`docker info` 输出里能看到 nvidia runtime 才说明 toolkit 就绪；没有则记下来，
-走创建分支时处理。
+同一路径在多台节点上落在同一个文件系统（gpfs/nfs/ceph 等）时，**同一路径在多节点可见**——
+那就不能用路径推断结果出自哪台节点，要用 `hostname` 确认。
 
-## 4. 选容器或新建
+## 3. 选容器或新建
 
-- **用户指名容器**：`docker inspect -f "{{.State.Status}}" <容器名>` 查状态。
-  `running` → 直接跳到第 8 节验证；`exited`/`created` → `docker start <容器名>`；
+- **用户指名容器**：`docker inspect -f '{{.State.Status}}' <容器名>`。
+  `running` → 跳到第 4 节验证；`exited`/`created` → `docker start <容器名>`；
   查无此容器 → 走创建分支。
-- **未指名**：先看用户意图。查询类（"有哪些容器/XX的容器在哪"）→ 把第 3 节的
-  `docker ps -a` 结果整理后**直接回答，不问**。要环境类（"给我个容器/准备开发
-  环境"）→ 给出推荐方案并直接创建：空闲卡 + 按驱动匹配的现成镜像 + 命名
-  `<用户名>-<卡型>-dev`（如 `alice-teco-dev`），创建完汇报用了哪些卡和镜像；
-  推荐不了或参数缺失才回到第 1 节的提问路径。不要动别人的容器，重名冲突就换名。
+- **未指名**：查询类（"有哪些容器/XX 的容器在哪"）→ 把第 2 节结果整理后**直接回答，不问**。
+  要环境类（"给我个容器/准备开发环境"）→ 按探测结果直接创建：空闲卡 + 与驱动版本匹配的
+  现成镜像 + 命名 `<用户名>-<卡型>-dev`，建完汇报用了哪些卡和镜像。推荐不了或参数缺失才提问。
+- 不要动别人的容器（按第 2 节归属判断）；重名冲突就换名。
+- 创建模板见 `references/create-containers.md`（太初 / NVIDIA / 兜底三套）。
 
-## 5. 创建容器：太初分支
+## 4. 验证容器
 
-依据：太初官方文档（pytorch2.12 v3.3.0「构建 Docker 容器」、transfer v2.0.0
-Docker 环境实践），在线来源 https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/。
-
-**镜像匹配**——先看节点上有什么：
+容器内确认设备可见 + 框架能 import，才算就绪：
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker images --format "{{.Repository}}:{{.Tag}}" | grep -iE "tecotp-docker|torch_sdaa|paddle|vllm|teco" | head -20'
+# 太初系
+ssh <别名> 'docker exec <容器名> bash -c "source /opt/tecoai/setvars.sh; python -c \"import torch_sdaa\" && echo PYTORCH_OK"'
+ssh <别名> 'docker exec <容器名> teco-smi -c 2>&1 | head -30'   # Health 列全 OK 即通过
+
+# NVIDIA
+ssh <别名> 'docker exec <容器名> nvidia-smi'
+ssh <别名> 'docker exec <容器名> python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"'
 ```
 
-- 镜像 tag 形态：`jfrog.tecorigin.net/tecotp-docker/release/<os>/<arch>/<产品>:<版本>`。
-- 按宿主 TecoDriver 版本对照兼容性选镜像（来源：compatibility v3.3.0 手册）：
+- import 失败先看容器内 conda 环境（不同镜像默认环境不同，映射见 `references/create-containers.md`）。
+- 容器内 `teco-smi -c` 显示的进程 PID 是**宿主机 PID**，与容器内 `ps` 不一致，属正常，不是环境问题。
+- 验证失败排查顺序：镜像内框架版本 vs 宿主驱动版本 → 设备是否真映射进容器 → 报告卡点。
+  **不要伪造"看起来成功"**。
 
-| 宿主 TecoDriver | 可用的 TecoToolKit（即镜像内版本） |
+## 5. 容器内执行任务
+
+长任务一律**后台 + 日志落盘 + 打印 pid**；前台阻塞会把 agent 挂住。
+
+```bash
+ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec -i <容器名> bash -s' <<'EOF'
+cd <容器内工作目录>
+nohup bash <启动脚本> > <容器内日志路径> 2>&1 &
+echo "pid=$!"
+EOF
+```
+
+- **用 `docker exec -i ... bash -s` + heredoc**，不要 `ssh '<别名>' 'docker exec <容器> bash -c "..."'`：
+  后者是 ssh → docker → bash 三层引号嵌套，命令里再有一个引号就会解析错。
+  实测 heredoc 形态稳；命令里含引号时优先用它。
+- 日志与产物必须落在**容器挂载目录内**（否则容器重建即丢）。先查第 2 节的挂载映射，
+  汇报时给容器内和宿主两个路径。
+- 只动用户自己的容器/进程。要 kill 别人或不确定归属的进程，先问。
+- 需要"先起服务再跑客户端"的任务（推理服务 + 压测/评测），服务起完等就绪再起客户端，
+  不要盲等固定秒数——轮询端口/健康检查。
+
+## 6. 盯进度
+
+四步，**从粗到细，先判断"在不在动"再谈"到哪了"**：
+
+1. **进程还在不在**：`docker exec <容器> ps -eo pid,ppid,etime,pcpu,args --sort=-pcpu | head`
+   看 `etime`（跑了多久）、有没有 `<defunct>`（僵尸不算在跑）。
+2. **日志尾部**：`docker exec <容器> tail -n 25 <日志路径>`。看最后一行是"在推进"还是"在等"。
+3. **产物目录**：`docker exec <容器> ls -lt <输出目录>`，看新的 run 目录/文件有没有在长。
+4. **增量测速**（对下载、写盘、生成类任务最有效——**看增量，不看瞬时**）：
+
+```bash
+ssh <别名> 'docker exec -i <容器> bash -s' <<'EOF'
+F=<被观察的文件>
+a=$(stat -c %s "$F"); sleep 20; b=$(stat -c %s "$F")
+echo "$(( (b-a)/20/1024 )) KB/s  当前 $(( b/1048576 )) MB  增量 $(( b-a )) B"
+EOF
+```
+
+判定表：
+
+| 现象 | 判定 |
 | --- | --- |
-| ≥ 2.3.0 | v3.0.0 ~ v3.3.0（前向兼容） |
-| ≥ 2.1.0 | v2.x |
-| 更早 | 区间约束，需对照 compatibility 手册核对 |
+| 进程在 + 日志/产物持续增长 | **running**，按增量算 ETA |
+| 进程在 + 产物长时间（几分钟）零增量 | **卡住或等待**（等下载/等锁/等对端）→ 把日志最后一行贴出来，别只说"还在跑" |
+| 进程消失 + 日志有完成标记 / `rc=0` | **完成**，去读结果文件 |
+| 进程消失 + 无完成标记 | **失败或被 OOM/外力杀掉**（`Exited (137)` = SIGKILL），查日志尾部与 rc |
 
-- 框架版本与 TecoToolKit 版本一一对应（TecoPyTorch v3.3.0 ↔ ToolKit v3.3.0）。
-  候选有多个且不确定时，把候选列出来问用户，不要替用户猜。
+- 汇报进度必须带**已跑时长 + 当前阶段 + 依据**（进程/日志/文件大小），不要只复述用户的描述。
+- 别在节点上跑 `find /` 全盘扫描——会拖慢正在跑的任务（尤其正在下载/写盘的）。
+  自己用完临时进程要清理；发现别人（或历史会话）留下的残留重进程，报告给用户，不要擅自 kill。
+- 结果读取：评测类产物通常在 `<输出目录>/<数据集>/<数据集>/<时间戳>/reports/`，
+  里面 `*.json` 是结构化指标、`report.html` 是给人看的。取指标用 `jq` 或 python 解析，
+  实例见 `references/exec-and-monitor.md`。
 
-**缺镜像**——问用户要 tar 包路径或下载 URL，然后：
+## 7. 汇报契约
 
-```bash
-# URL 在节点上直接下（wb.tecorigin.com 是太初内网源）
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'wget -O /tmp/<tar名> "<URL>" && md5sum /tmp/<tar名>'
-# 或用户本地有 tar，从 Windows scp 上去
-scp -o BatchMode=yes -o ConnectTimeout=15 "<本地路径>/<tar名>" <别名>:/tmp/
-# 校验 md5 与官方一致后导入
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker load < /tmp/<tar名> && docker images | grep -i teco'
-```
-
-导入失败或 md5 对不上 → 把差异报给用户，不要硬装。
-
-**创建**（官方模板，逐卡映射，默认走这个）：
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'DEVS=""; for i in <卡号列表，如 0 1 2 3>; do DEVS="$DEVS --device=/dev/tcaicard$i"; done
-docker run -itd --name=<容器名> --net=host --ipc=host $DEVS \
-  --cap-add SYS_PTRACE --cap-add SYS_ADMIN --shm-size 64g \
-  -v <宿主工作路径>:<容器内路径> <镜像> /bin/bash'
-```
-
-- `-itd` 后台常驻；`--device=/dev/tcaicardN` 挂载指定 SDAA 设备（SPA）；
-  `--shm-size` 建议 64G 及以上（训练场景 128g）。
-- **全卡/大量卡场景**可用 transfer 实践模板（多卡训练/大模型微调实测）：
-  `-e TECO_VISIBLE_DEVICES=all --net=host --ipc=host --privileged=true --ulimit memlock=-1 --shm-size=128g`，
-  不逐卡映射。取舍：逐卡映射权限面小、能卡级隔离，对比实验默认用；privileged
-  全通只在明确要全部卡时用。
-- 卡号映射口径：容器挂了 tcaicard4~7 时，容器内 `SDAA_VISIBLE_DEVICES=0`
-  对应物理卡 4；对比实验要独占某几张卡时，只映射那几张。
-- 挂载注意：`-v` 的容器内路径不要落在 `/mnt` 下（官方文档提醒会影响数据集路径）。
-- **容器与宿主机 TecoDriver 版本必须一致**（transfer 文档原文），版本对不上时
-  先按上面兼容表换镜像，不要强行创建。
-
-## 6. 创建容器：NVIDIA 分支
-
-**runtime 检查**：第 3 节若发现 `docker info` 里没有 nvidia runtime：
-
-```bash
-sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-```
-
-这些是宿主机改动，输出给用户/管理员执行，**agent 不代装**；装完回本 skill 继续。
-
-**镜像**：默认 NGC PyTorch（`nvcr.io/nvidia/pytorch:<tag>-py3`，tag 问用户，
-或沿用节点上已有镜像的版本风格）。节点上没有：
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker pull nvcr.io/nvidia/pytorch:<tag>-py3'
-```
-
-pull 失败（多半是集群无外网）→ 问用户：有没有现成 tar（scp 上去 `docker load`），
-或从另一台有网机器 `docker save -o <名>.tar <镜像>` 后 scp 过来 `docker load`。
-
-**创建**：
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker run -itd --name=<容器名> --gpus all --ipc=host \
-  --shm-size 64g -v /home:/home -u "$(id -u):$(id -g)" <镜像> bash'
-```
-
-- 只用部分卡时把 `--gpus all` 换成 `--gpus "device=0,1"`（在整段单引号命令内直接
-  用双引号包裹即可，不要嵌套单引号——`'"device=0,1"'` 的单引号三明治会截断外层引号）。
-- `-u $(id -u):$(id -g)` 保住容器内产出文件的属主是你，避免 root 落盘；NGC 容器
-  进去时提示 `I have no name!` 属正常。
-- NGC 镜像默认不带 sshd，走 VSCode attach 路线（第 9 节）即可，不要改镜像。
-
-## 7. 创建容器：通用兜底分支（昇腾/寒武纪等其他卡，试验性）
-
-先探测设备节点和厂商运行时：
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'ls /dev | grep -iE "davinci|cambricon|mlu|npu|ascend"; ls /usr/local 2>/dev/null | grep -iE "ascend|neuware|cambricon"; docker info 2>/dev/null | grep -iE "ascend|nvidia"'
-```
-
-- 有 **ascend docker runtime**（`docker info` 可见 ascend）→ 优先官方插件写法：
-  `docker run -itd --name=<容器名> -e ASCEND_VISIBLE_DEVICES=<卡号> --net=host --ipc=host --shm-size 64g -v <路径>:<路径> <镜像> bash`，
-  不手动 `--device /dev/davinci*`。
-- 识别不出 runtime 插件 → 兜底形态（各家通用）：`--privileged=true --net=host
-  --ipc=host --shm-size 64g` + 按用户给的设备名 `--device` 映射。
-- 镜像从哪来：同第 5 节"缺镜像"流程（tar 路径/URL 问用户）。
-- 此分支验证手段弱：容器内只确认设备节点可见 + 用户指定框架能 import；跑不通
-  就停下，以该卡型官方文档为准，如实报告卡在哪一步。
-
-## 8. 容器内验证
-
-**太初容器**：
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec <容器名> bash -c "source /opt/tecoai/setvars.sh; python -c \"import torch_sdaa\" && echo PYTORCH_OK"'
-```
-
-import 失败先看容器内 conda 环境（不同镜像默认环境不同）：
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec <容器名> bash -c "source /opt/tecoai/setvars.sh; conda env list"'
-```
-
-按镜像类型对应激活再验：TecoPyTorch → `conda activate torch27_env_py310` +
-`import torch_sdaa`；Teco-vLLM → `conda activate vllm_env_py312` + `import vllm`；
-TecoPaddle → `conda activate paddle_env_py310` + `import paddle_sdaa`。
-
-卡健康：
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec <容器名> teco-smi -c 2>&1 | head -30'
-```
-
-Health 列全 OK 即通过。**容器内 `teco-smi -c` 显示的进程 PID 是宿主机 PID，与容器
-内 `ps` 看到的不一致，属正常**（官方 FAQ），不是环境问题。
-
-**NVIDIA 容器**：
-
-```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec <容器名> nvidia-smi; docker exec <容器名> python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"'
-```
-
-验证失败时的排查顺序：镜像内框架版本 vs 宿主驱动版本（对照第 5/6 节兼容表）→
-设备是否真映射进容器 → 报告卡点，不要伪造"看起来成功"。
-
-## 9. 输出格式与进入方式
-
-直接给结论 + 一张证据表：
+给结论 + 一张证据表。固定包含这几项，缺的写"unknown"而不是猜：
 
 | 项目 | 值 |
 | --- | --- |
-| 节点 | sdaa-192.167.252.35（太初，宿主 TecoDriver 2.3.0） |
-| 容器 | alice-teco-dev（running） |
-| 镜像 | jfrog.tecorigin.net/tecotp-docker/release/ubuntu22.04/x86_64/torch_sdaa:... |
-| 挂载卡 | tcaicard0~3（容器内 SDAA_VISIBLE_DEVICES 0~3） |
-| 验证 | import torch_sdaa OK；teco-smi -c 全 OK |
-| 挂载路径 | /home/alice/work:/work |
+| 节点 | 别名 + `hostname`（多节点共享存储时必须给，用于区分结果来源） |
+| 容器 | 名字 + running/exited |
+| 镜像 / 卡 | 镜像 tag；占用卡号（Bus-Id + Index） |
+| 任务 | 启动脚本 + 计算位置（容器内路径） |
+| 日志 | 容器内路径（必要时附宿主路径） |
+| 进度 | 已跑时长 + 当前阶段 + 依据（进程/日志/产物） |
+| 状态 | running / 卡住 / 完成 / 失败（+ rc） |
+| 结果 | 产物目录 + 关键指标（有则给） |
 
-进入命令（直接可用）：
+后续别的 skill 要接手时，移交这三样就够：**节点别名 + 容器名 + 容器内工作路径**。
 
-```bash
-ssh <别名>
-docker exec -it <容器名> bash
-```
+## 8. VS Code / 远程开发接入
 
-VSCode 两条路线（默认推荐 A）：
+- VS Code 的 Remote-SSH **直接读 `~/.ssh/config`**，所以 config 里每个 Host 都是可连接节点；
+  本 skill 不维护节点清单，也就不存在"某个节点没被支持"这回事。
+- **路线 A（推荐，零侵入）：Attach。** 本地 VS Code Remote-SSH 连上节点 → 装官方
+  Dev Containers 扩展 → F1 → "Dev Containers: Attach to Running Container..." → 选容器。
+  attach 与容器怎么启动的无关；容器重启后重新 attach 即可。
+- **路线 B：容器内 sshd。** 体验与普通 SSH 服务器一致，但要维护镜像内 sshd 和端口分配，
+  容器重建后 IP/端口会变。仅用户明确要求时再展开。
+- 远端 VS Code 扩展 / agent 需要直连模型 API 时，用 `remote-agent-config` skill 渲染配置，
+  **不要依赖反向 SSH 隧道**（隧道一断，远端 agent 就跟着死）。
 
-- **A. Attach（零侵入，推荐）**：本地 VSCode Remote-SSH 连上节点 → 装官方
-  Dev Containers 扩展 → F1 → "Dev Containers: Attach to Running Container..." →
-  选容器。attach 与容器怎么启动的无关，容器重启后重新 attach 即可；扩展等
-  attach 配置可保存复用。
-- **B. 容器内 sshd**：体验与普通 SSH 服务器一致，但要维护镜像内 sshd 和端口
-  分配，容器重建后 IP/端口会变。仅用户明确要求时再给要点，默认不展开。
+## 9. 陷阱与边界
 
-边界声明：本 skill 到"容器就绪并验证通过"为止。跑实验、同步代码不在范围内；
-后续 remote-run 类 skill 应引用本 skill 的输出（节点别名 + 容器名 + 挂载路径）。
+- **别按标签推断事实**。节点名、卡型、"哪个集群"都不算证据——卡型看 `command -v`，
+  驱动看 `*-smi`，身份看 `whoami`/`hostname`。同一台机器的内网名和外部名可能完全不同。
+- **共享存储上的路径会骗人**。多节点共享同一文件系统时，路径到处都能看到，
+  不代表结果出自那台——用 `hostname` 和"服务监听地址"一起判断（`127.0.0.1:8010` 说明服务在本机）。
+- **卡 → 容器占用反查**用 `who-use-gpu` skill（不是 `gpu-container-lookup`，那个名字不存在）。
+- **不要用 `docker inspect` 的设备映射判断卡归属**：实际节点上的容器几乎全是 privileged 且
+  `Devices` 为空。查占用关系走上面的 skill。
+- **残留进程**：历史会话可能留下长时间空转的命令（全盘 `find`、`tail -f`），
+  它们会抢 I/O 并污染后来的进度判断。摸底时留意，报告但不擅自动手。
+
+边界：本 skill 到"任务跑起来、盯到状态、给出结果位置"为止。写实验脚本、代码同步策略
+不属于这里（`ssh-docker` 有编译/测试/调试模板）。本 skill 的输出（节点别名 + 容器名 +
+工作路径）供后续 skill 接手引用。
