@@ -5,7 +5,9 @@
       "id": 1,
       "prompt": "我有一个vLLM推理qwen3-32b的prof trace文件，路径是/home/client/aliyun/public/prof/260519/bs1i900o20/1779157177645234411-rank-0.1779158488769792974.pt.trace.json.gz，帮我分析一下prefill和decode阶段各算子的耗时占比",
       "expected_output": "输出prefill和decode两个表格，每个表格包含gemm、通信、fa、triton、其他elementwise、memcpy/memset六类的总耗时、调用次数、占比",
-      "files": ["/home/client/aliyun/public/prof/260519/bs1i900o20/1779157177645234411-rank-0.1779158488769792974.pt.trace.json.gz"]
+      "files": [
+        "/home/client/aliyun/public/prof/260519/bs1i900o20/1779157177645234411-rank-0.1779158488769792974.pt.trace.json.gz"
+      ]
     },
     {
       "id": 2,
@@ -17,6 +19,18 @@
       "id": 3,
       "prompt": "我要分析SGLang推理的prof数据，trace文件在/home/client/aliyun/prof/sgl-qwen35/目录下，需要看prefill和decode的算子耗时分布",
       "expected_output": "找到trace文件，使用分析脚本解析，输出两个阶段的算子分类统计表",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "我有一份太初T100上的vLLM profiling trace，里面包含 tecoblas、tecolmk、tecodnn、tccl 和 WAIT kernel，帮我分析 prefill/decode 算子耗时分类",
+      "expected_output": "使用共享分类规则识别T100 GEMM、通信、FlashAttention、融合/elementwise和内存操作；WAIT不作为计算kernel计时，并输出与原DCU/NVIDIA报告兼容的六类汇总",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "我有太初T100的trace，kernel名称包含 tecoblas、tecolmk、tecodnn、tccl、fused_qk_gemma_norm_mrope、prefill_cache 和 WAIT；请根据本地 tecovllm 算子语义分类并审计未知项。",
+      "expected_output": "先使用共享有序分类规则和T100本地知识参考；gemma norm/mrope、prefill_cache、tecodnn broadcast/no_broadcast/masked_fill 不得误判为GEMM/FlashAttention/通信；WAIT/SET排除；输出classification_rule和fallback:unknown审计结果。",
       "files": []
     }
   ]

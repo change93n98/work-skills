@@ -18,53 +18,7 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 
-# Operator classification patterns
-OP_CATEGORIES = {
-    "gemm": [
-        "gemm", "Gemm", "GEMM", "mm", "linear", "addbmm", "hgemm",
-        "Hipblaslt_Launch", "hipblaslt", "rocblas", "ROCBLAS",
-        "CKGemm", "ck_gemm", "DeviceGemm", "GroupedGemm",
-        "SplitkGemm", "StreamkGemm",
-    ],
-    "通信 (comm)": [
-        "AllReduce", "all_reduce", "nccl", "rccl", "NCCL", "RCCL",
-        "broadcast", "Broadcast", "AllGather", "all_gather",
-        "ReduceScatter", "reduce_scatter", "CustomAllReduce",
-        "allreduce", "AllReduceRing", "AllReduceTree",
-        "ncclKernel", "rcclKernel",
-    ],
-    "FlashAttention (fa)": [
-        "flash_attn", "flash_fwd", "flash_bwd", "fmha", "fmoe",
-        "FlashAttention", "flash_attention", "FlashDecoding",
-        "flash_decoding", "MHA", "mha_fwd", "mha_bwd",
-        "ck_fmha", "CKFmha", "fwd_split", "fwd_combine",
-    ],
-    "Triton": [
-        "triton", "Triton", "triton_kernel",
-    ],
-    "其他elementwise": [
-        "elementwise", "ElementWise",
-        "softmax", "Softmax", "layernorm", "LayerNorm",
-        "rmsnorm", "RMSNorm", "SiluGelu", "silu", "gelu", "relu",
-        "embedding", "Embedding", "rope", "RoPE", "RotaryEmbedding",
-        "topk", "TopK", "top_k", "sampling", "Sampling",
-        "transpose", "reshape", "view", "contiguous",
-        "copy_", "clone", "fill_", "scale", "Scale",
-        "Reduce", "reduce", "add", "mul", "div", "sub",
-        "exp", "log", "sqrt", "pow", "abs", "neg",
-    ],
-    "memcpy/memset": [
-        "memcpy", "memset", "Memcpy", "Memset", "MemCpy", "MemSet",
-        "D2H", "H2D", "H2H", "D2D",
-        "hipMemcpy", "hipMemset", "hipMem",
-        "AsyncMemcpy", "async_memcpy", "MemcpyAsync", "memcpy_async",
-    ],
-}
-
-EXCLUDE_PATTERNS = [
-    "profiler_step", "ProfilerStep", "profiler", "Profile", "PROFILER",
-    "torch.autograd", "autograd",
-]
+from kernel_categories import OP_CATEGORIES, classify_kernel, should_exclude_kernel
 
 
 def decompress_trace(trace_path: str) -> str:
@@ -213,6 +167,15 @@ def get_kernels_perfetto(tp, start_ts: int, end_ts: int) -> list:
         OR s.name LIKE '%memset%'
         OR s.name LIKE '%triton%'
         OR s.name LIKE '%Triton%'
+        OR s.name LIKE '%teco%'
+        OR s.name LIKE '%Teco%'
+        OR s.name LIKE '%tccl%'
+        OR s.name LIKE '%TCCL%'
+        OR s.name LIKE '%sdaa%'
+        OR s.name LIKE '%SDAA%'
+        OR s.name LIKE '%nvjet%'
+        OR s.name LIKE '%cutlass%'
+        OR s.name LIKE '%cublas%'
         OR s.name LIKE '%ck_%'
         OR s.name LIKE '%CK_%'
         OR s.name LIKE '%softmax%'
@@ -231,23 +194,6 @@ def get_kernels_perfetto(tp, start_ts: int, end_ts: int) -> list:
     ORDER BY s.ts
     """
     return run_perfetto_query(tp, query)
-
-
-def classify_kernel(name: str) -> str:
-    """Classify kernel by name patterns."""
-    name_lower = name.lower()
-
-    # Check exclusions first
-    for pattern in EXCLUDE_PATTERNS:
-        if pattern.lower() in name_lower:
-            return None
-
-    for category, patterns in OP_CATEGORIES.items():
-        for pattern in patterns:
-            if pattern.lower() in name_lower:
-                return category
-
-    return "其他elementwise"
 
 
 def analyze_kernels(kernels: list) -> dict:

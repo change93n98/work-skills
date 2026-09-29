@@ -42,11 +42,17 @@ description: >
 └── *.json.gz           # prof trace文件
 ```
 
-## 环境：海光DCU（ROCm）
+## 支持环境
 
-- 设备: `HIP_VISIBLE_DEVICES`
-- 通信: RCCL
-- blas: hipBLASLt
+- **海光 DCU（ROCm）**：`HIP_VISIBLE_DEVICES`、RCCL、hipBLASLt/rocBLAS/CK
+- **NVIDIA GPU**：CUDA、NCCL、cuBLAS/cuBLASLt、CUTLASS、FlashAttention、Triton
+- **太初 T100**：识别 `tecoblas`、`tecolmk`、`tecodnn`、`tecocustom`、`tccl`、`sdaart` 等 trace kernel 命名
+
+算子分类由两个分析器共用的 `scripts/kernel_categories.py` 提供。分类不是简单的 kernel 名字 substring：规则按运行时标记、通信、内存、attention、Triton、融合算子、GEMM 的语义优先级匹配，并返回匹配原因。平台规则见 `references/kernel-classification.md`；T100 的本地语义证据见 `references/tecovllm-t100-kernel-knowledge.md`。
+
+如果用户提供了本地 T100 代码仓库，优先读取算子注册/API 和实现来确认语义，再扩展稳定的命名空间或算子模式；不要根据一个完整的模板实例名直接硬编码。
+
+以下服务启动示例主要面向海光 DCU；如果用户只提供 NVIDIA/T100 的已有 trace，直接使用“快速模式”，不套用 DCU 环境变量。
 
 ## Step 0: 查找空闲卡
 
@@ -314,12 +320,14 @@ $RUN_DIR/
   - Prefill = trace开始 → 第一个快step开始（包含warmup gap）
   - Decode step N = 快step阶段的第N个step（正向索引，默认N=2）
 - 算子分六类：gemm、通信、FlashAttention、Triton、其他elementwise、memcpy/memset
+- 分类兼容 DCU、NVIDIA 和太初 T100；T100 的 `WAIT` 运行时等待标记不计入 kernel busy time，而计入 bubble/idle
+- 分类规则同时输出 `classification_rule`；`fallback:unknown` 必须通过 audit 脚本检查，不允许静默认为分类正确
 
 ### XLSX输出（4个子表）
 
 | Sheet | 内容 | 列 |
 |-------|------|-----|
-| Prefill详细算子 | 每个kernel的耗时明细 | 算子名称、分类、调用次数、总耗时(us)、平均耗时(us)、相对占比(%)、绝对占比(%) |
+| Prefill详细算子 | 每个kernel的耗时明细 | 算子名称、分类、分类规则、调用次数、总耗时(us)、平均耗时(us)、相对占比(%)、绝对占比(%) |
 | Prefill分类汇总 | 按6大类汇总 | 分类、算子种类数、调用次数、总耗时(us)、总耗时(ms)、相对占比(%) |
 | Decode-Step2详细算子 | 每个kernel的耗时明细 | 同上 |
 | Decode-Step2分类汇总 | 按6大类汇总 | 同上 |
@@ -363,6 +371,26 @@ memcpy/memset               0.00          0      0.00%
 ============================================================
 ```
 
+## 分类审计（推荐在新硬件/新版本上执行）
+
+先审计，再把汇总表用于性能结论：
+
+```bash
+python3 scripts/audit_kernel_categories.py \
+  <trace.json.gz 或 kernel明细.xlsx> \
+  --output kernel_classification_audit.json
+```
+
+审计报告按分类规则统计调用次数和耗时，并列出 `fallback:unknown` 的 kernel。
+新硬件的完成标准不是“所有名字都命中某个字符串”，而是：
+
+1. 通信、内存、attention、GEMM 等高影响类别没有明显语义冲突；
+2. fallback 未知项按耗时从高到低人工检查；
+3. 对新增稳定算子模式补充回归测试；
+4. 重新运行真实 trace，确认 kernel 总耗时守恒，WAIT/profiler marker 不进入 busy kernel。
+
+`--fail-on-fallback` 只适合规则收敛阶段；未知 kernel 在探索新平台时可以先报告、再确认，不能直接把 fallback 当作正确证据。
+
 ## 快速模式：仅分析已有Trace文件
 
 如果已经有trace文件（`.json.gz`或`.pt.trace.json.gz`），直接跳过前面所有步骤：
@@ -394,3 +422,5 @@ python3 scripts/prof_analyze.py \
 - `vllm-prof-guide.md` / `sglang-prof-guide.md` — profiling指南
 - `prof算子耗时占比分析.pdf` — 分析原理
 - `perfetto-sql-py工具.pdf` — Perfetto SQL工具
+- `kernel-classification.md` — DCU/NVIDIA/太初 T100 kernel 命名与分类扩展规则
+- `tecovllm-t100-kernel-knowledge.md` — 基于本地 tecovllm API/实现的 T100 语义证据

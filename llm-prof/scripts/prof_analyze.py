@@ -16,6 +16,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from kernel_categories import OP_CATEGORIES, classification_reason, classify_kernel, should_exclude_kernel
+
 try:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -23,57 +25,6 @@ try:
     HAS_OPENPYXL = True
 except ImportError:
     HAS_OPENPYXL = False
-
-# Operator classification patterns (case-insensitive matching)
-OP_CATEGORIES = {
-    "gemm": [
-        "gemm", "Gemm", "GEMM", "hgemm",
-        "Hipblaslt_Launch", "hipblaslt", "rocblas", "ROCBLAS",
-        "CKGemm", "ck_gemm", "DeviceGemm", "GroupedGemm",
-        "SplitkGemm", "StreamkGemm",
-        "Cijk", "cijk",  # rocBLAS kernel naming
-    ],
-    "通信 (comm)": [
-        "AllReduce", "all_reduce", "nccl", "rccl", "NCCL", "RCCL",
-        "broadcast", "Broadcast", "AllGather", "all_gather",
-        "ReduceScatter", "reduce_scatter", "CustomAllReduce",
-        "allreduce", "AllReduceRing", "AllReduceTree",
-    ],
-    "FlashAttention (fa)": [
-        "flash_attn", "flash_fwd", "flash_bwd", "fmha", "fmoe",
-        "FlashAttention", "flash_attention", "FlashDecoding",
-        "flash_decoding", "MHA", "mha_fwd", "mha_bwd",
-        "ck_fmha", "CKFmha",
-        "page_attention", "paged_attention", "PagedAttention",
-        "PageAttention", "page_attention_v1", "page_attention_v2",
-    ],
-    "Triton": [
-        "triton", "Triton", "triton_kernel",
-    ],
-    "其他elementwise": [
-        "elementwise", "ElementWise",
-        "vectorized",  # PyTorch vectorized kernels
-        "softmax", "Softmax", "layernorm", "LayerNorm",
-        "rmsnorm", "RMSNorm", "SiluGelu", "silu", "gelu", "relu",
-        "embedding", "Embedding", "rope", "RoPE", "RotaryEmbedding",
-        "topk", "TopK", "top_k", "sampling", "Sampling",
-        "transpose", "reshape", "view", "contiguous",
-        "copy_", "clone", "fill_", "scale", "Scale",
-        "reduce_kernel",  # PyTorch reduce kernels (not AllReduce/ReduceScatter)
-        "unary", "binary", "ternary",
-    ],
-    "memcpy/memset": [
-        "memcpy", "memset", "Memcpy", "Memset", "MemCpy", "MemSet",
-        "D2H", "H2D", "H2H", "D2D",
-        "hipMemcpy", "hipMemset", "hipMem",
-        "AsyncMemcpy", "async_memcpy", "MemcpyAsync", "memcpy_async",
-    ],
-}
-
-EXCLUDE_PATTERNS = [
-    "profiler_step", "ProfilerStep", "profiler",
-    "Profile", "PROFILER", "torch.autograd", "autograd",
-]
 
 
 def load_trace(trace_path: str) -> list:
@@ -233,6 +184,10 @@ def get_gpu_kernels(events: list, start_ts: int, end_ts: int) -> list:
                 "silu", "gelu", "relu", "rope", "RoPE",
                 "topk", "TopK", "embedding", "Embedding",
                 "memcpy", "memset", "Memcpy", "Memset",
+                # T100/DCU/NVIDIA vendor and runtime names
+                "teco", "Teco", "tccl", "TCCL", "sdaa", "SDAA",
+                "tecoblas", "tecolmk", "tecodnn", "tecocustom",
+                "nvjet", "cutlass", "cublas",
             ]
         )
 
@@ -246,8 +201,10 @@ def get_gpu_kernels(events: list, start_ts: int, end_ts: int) -> list:
         if dur <= 0:
             continue
 
-        # Exclude profiling overhead
-        if any(p.lower() in name.lower() for p in EXCLUDE_PATTERNS):
+        # Exclude only explicit runtime/profiler markers.  Broad substring
+        # filtering would incorrectly drop valid T100 kernels containing
+        # similar text.
+        if should_exclude_kernel(name):
             continue
 
         kernels.append({
@@ -258,23 +215,6 @@ def get_gpu_kernels(events: list, start_ts: int, end_ts: int) -> list:
         })
 
     return kernels
-
-
-def classify_kernel(name: str) -> str:
-    """Classify a kernel name into one of the 6 categories."""
-    name_lower = name.lower()
-
-    # Check exclusions first
-    for pattern in EXCLUDE_PATTERNS:
-        if pattern.lower() in name_lower:
-            return None
-
-    for category, patterns in OP_CATEGORIES.items():
-        for pattern in patterns:
-            if pattern.lower() in name_lower:
-                return category
-
-    return "其他elementwise"
 
 
 def analyze_kernels(kernels: list) -> dict:
@@ -388,6 +328,7 @@ def analyze_kernels_detailed(kernels: list, phase_duration_us: float) -> list:
         kernel_stats[key]["count"] += 1
         kernel_stats[key]["total_dur"] += kernel["dur"]
         kernel_stats[key]["category"] = category
+        kernel_stats[key]["rule"] = classification_reason(kernel["name"])
 
     total_kernel_dur = sum(s["total_dur"] for s in kernel_stats.values())
 
@@ -396,6 +337,7 @@ def analyze_kernels_detailed(kernels: list, phase_duration_us: float) -> list:
         result.append({
             "kernel_name": name,
             "category": stats["category"],
+            "classification_rule": stats.get("rule", ""),
             "call_count": stats["count"],
             "total_duration_us": stats["total_dur"],
             "avg_duration_us": stats["total_dur"] / stats["count"] if stats["count"] > 0 else 0,
@@ -444,7 +386,7 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
         """Write a detailed kernel sheet."""
         ws.title = title
 
-        headers = ["算子名称", "分类", "调用次数", "总耗时(us)", "平均耗时(us)",
+        headers = ["算子名称", "分类", "分类规则", "调用次数", "总耗时(us)", "平均耗时(us)",
                     "相对占比(%)", "绝对占比(%)"]
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=h)
@@ -456,24 +398,25 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
         for row, item in enumerate(data, 2):
             ws.cell(row=row, column=1, value=item["kernel_name"]).border = thin_border
             ws.cell(row=row, column=2, value=item["category"]).border = thin_border
-            ws.cell(row=row, column=3, value=item["call_count"]).border = thin_border
-            ws.cell(row=row, column=3).alignment = num_align
+            ws.cell(row=row, column=3, value=item.get("classification_rule", "")).border = thin_border
+            ws.cell(row=row, column=4, value=item["call_count"]).border = thin_border
+            ws.cell(row=row, column=4).alignment = num_align
 
-            c4 = ws.cell(row=row, column=4, value=round(item["total_duration_us"], 2))
-            c4.border = thin_border
-            c4.number_format = '#,##0.00'
-
-            c5 = ws.cell(row=row, column=5, value=round(item["avg_duration_us"], 2))
+            c5 = ws.cell(row=row, column=5, value=round(item["total_duration_us"], 2))
             c5.border = thin_border
             c5.number_format = '#,##0.00'
 
-            c6 = ws.cell(row=row, column=6, value=round(item["relative_pct"], 2))
+            c6 = ws.cell(row=row, column=6, value=round(item["avg_duration_us"], 2))
             c6.border = thin_border
-            c6.number_format = '0.00'
+            c6.number_format = '#,##0.00'
 
-            c7 = ws.cell(row=row, column=7, value=round(item["absolute_pct"], 2))
+            c7 = ws.cell(row=row, column=7, value=round(item["relative_pct"], 2))
             c7.border = thin_border
             c7.number_format = '0.00'
+
+            c8 = ws.cell(row=row, column=8, value=round(item["absolute_pct"], 2))
+            c8.border = thin_border
+            c8.number_format = '0.00'
 
         # Auto width
         for col in range(1, len(headers) + 1):
