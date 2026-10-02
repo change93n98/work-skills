@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render local Claude Code / Codex config and push it to remote SSH hosts.
 
-Reads the (working) local config as the source of truth, strips anything
+Reads the selected cc-switch preset as the source of truth, strips anything
 machine-specific (Windows paths, hooks, MCP servers), and writes portable
 config over SSH so remote agents talk to the model API directly instead of
 depending on a reverse tunnel back to the laptop.
@@ -109,6 +109,7 @@ def log(msg):
 
 
 SSH_OPTS = [
+    "-o", "ClearAllForwardings=yes",
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     "-o", "ServerAliveInterval=5",
@@ -167,8 +168,8 @@ def scp_to(host, local_path, remote_path):
 # A distro running its own cc-switch keeps owning ~/.claude/settings.json -- that
 # is what the `claude` CLI there reads. The VS Code extension, however, takes its
 # config from the server's Machine/settings.json, which cc-switch does not manage;
-# that is why the extension goes unconfigured while the CLI works. So a WSL target
-# writes the extension config only, and leaves the CLI file alone.
+# that can leave the extension misconfigured while the CLI works. A WSL target
+# also records the selected key approval, but leaves CLI settings alone.
 
 def _wsl_env():
     # wsl.exe emits UTF-16 unless this is set.
@@ -199,6 +200,50 @@ def wsl_distros():
     return [ln.strip() for ln in r.stdout.replace("\x00", "").splitlines() if ln.strip()]
 
 
+def json_object(text, label):
+    """Never replace an unreadable/malformed existing configuration with {}."""
+    try:
+        data = json.loads(text) if text is not None else {}
+    except (ValueError, TypeError):
+        raise ValueError(f"invalid JSON in {label}; refusing to overwrite") from None
+    if not isinstance(data, dict):
+        raise ValueError(f"expected an object in {label}; refusing to overwrite")
+    return data
+
+
+def approve_api_key(config, key):
+    """Record use of the selected key, authorized by the user's sync request.
+
+    Claude Code 2.1.286's VS Code client checks the trimmed key's last 20
+    characters in customApiKeyResponses even when auth status reports success.
+    Never override a prior explicit rejection or print this credential suffix.
+    """
+    if not key:
+        return config
+    suffix = key.strip()[-20:]
+    if not suffix:
+        raise ValueError("selected API key is blank")
+    responses = config.get("customApiKeyResponses", {})
+    if not isinstance(responses, dict):
+        raise ValueError("invalid customApiKeyResponses; refusing to overwrite")
+    approved = responses.get("approved", [])
+    rejected = responses.get("rejected", [])
+    if any(not isinstance(v, list) or any(not isinstance(x, str) for x in v)
+           for v in (approved, rejected)):
+        raise ValueError("invalid API key approval lists; refusing to overwrite")
+    if suffix in rejected:
+        raise ValueError("selected API key was explicitly rejected; ask the user before changing that decision")
+    if suffix in approved:
+        return config
+    return dict(config, customApiKeyResponses=dict(
+        responses, approved=[*approved, suffix], rejected=list(rejected)))
+
+
+def merge_machine(config, env_list):
+    return dict(config, **{"claudeCode.environmentVariables": env_list,
+                          "claudeCode.disableLoginPrompt": True})
+
+
 def sync_wsl(distro, env_list, ts, force=False):
     """Merge claudeCode.environmentVariables into the distro's Machine settings.
 
@@ -210,28 +255,31 @@ def sync_wsl(distro, env_list, ts, force=False):
     target = f"{home}/.vscode-server/data/Machine/settings.json"
     path = wsl_unc(distro, target)
 
-    cur = {}
-    if os.path.exists(path):
-        try:
-            parsed = json.loads(Path(path).read_text(encoding="utf-8"))
-            if isinstance(parsed, dict):
-                cur = parsed
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-            cur = {}
-    if not force and cur.get("claudeCode.environmentVariables") == env_list:
+    cur = json_object(Path(path).read_text(encoding="utf-8") if os.path.exists(path) else None, path)
+    desired = merge_machine(cur, env_list)
+    auth_path = Path(wsl_unc(distro, f"{home}/.claude.json"))
+    auth = json_object(auth_path.read_text(encoding="utf-8") if auth_path.exists() else None, str(auth_path))
+    key = next((x["value"] for x in env_list if x["name"] == "ANTHROPIC_API_KEY"), None)
+    desired_auth = approve_api_key(auth, key)
+    if not force and cur == desired and auth == desired_auth:
         return "skip"
 
+    if auth != desired_auth:
+        if auth_path.exists():
+            shutil.copy2(auth_path, f"{auth_path}.bak-{ts}")
+        auth_path.write_text(json.dumps(desired_auth, indent=2) + "\n", encoding="utf-8")
+        wsl_run(distro, f"chmod 600 {shlex.quote(home + '/.claude.json')}")
     if os.path.exists(path):
         shutil.copy2(path, f"{path}.bak-{ts}")
-    cur["claudeCode.environmentVariables"] = env_list
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(cur, indent=4) + "\n", encoding="utf-8")
+    dest.write_text(json.dumps(desired, indent=4) + "\n", encoding="utf-8")
     # The file carries the API key, so it must not stay world-readable.
     wsl_run(distro, f"chmod 600 {shlex.quote(target)}")
 
     back = json.loads(dest.read_text(encoding="utf-8"))
-    if back.get("claudeCode.environmentVariables") != env_list:
+    auth_ok = not key or json.loads(auth_path.read_text(encoding="utf-8")) == desired_auth
+    if back != desired or not auth_ok:
         raise RuntimeError("wrote Machine settings but the value did not stick")
     return "updated"
 
@@ -605,9 +653,13 @@ def remote_home(host):
 
 
 def remote_read(host, path):
-    r = ssh(host, f'cat {shlex.quote(path)} 2>/dev/null', check=False)
-    text = r.stdout
-    return text if text.strip() else None
+    quoted = shlex.quote(path)
+    r = ssh(host, f'if [ -e {quoted} ]; then cat {quoted}; else exit 44; fi', check=False)
+    if r.returncode == 44:
+        return None
+    if r.returncode:
+        raise RuntimeError(f"cannot read remote config {path}")
+    return r.stdout
 
 
 def json_equal(remote_text, desired_text):
@@ -756,6 +808,10 @@ def main():
         if do_claude:
             log("=== claude ~/.claude/settings.json (secrets redacted) ===")
             log(json.dumps(redact_secrets(claude), indent=2))
+            if env.get("ANTHROPIC_API_KEY"):
+                log("~/.claude.json: merge approval for selected API key (never override rejection)")
+            if do_vscode:
+                log("Machine settings: merge environmentVariables and disableLoginPrompt=true")
         if do_codex:
             log("=== codex ~/.codex/config.toml (secrets redacted) ===")
             log(redact_toml(codex_toml))
@@ -786,9 +842,20 @@ def main():
         try:
             home = remote_home(host)
             machine = f"{home}/.vscode-server/data/Machine"
+            auth_state_path = f"{home}/.claude.json"
+            auth_state_txt = None
+            auth_state_changed = False
+            if do_claude and env.get("ANTHROPIC_API_KEY"):
+                old_auth = json_object(remote_read(host, auth_state_path), auth_state_path)
+                new_auth = approve_api_key(old_auth, env["ANTHROPIC_API_KEY"])
+                auth_state_changed = old_auth != new_auth
+                auth_state_txt = json.dumps(new_auth, indent=2) + "\n"
+            if do_vscode:
+                old_machine = json_object(remote_read(host, f"{machine}/settings.json"), "Machine settings")
+                new_machine = merge_machine(old_machine, env_list)
 
             if not args.force:
-                same = True
+                same = not auth_state_changed
                 if do_claude:
                     same = same and json_equal(
                         remote_read(host, f"{home}/.claude/settings.json"), claude_txt)
@@ -802,14 +869,7 @@ def main():
                         same = same and json_equal(
                             remote_read(host, f"{home}/.codex/cc-switch-model-catalog.json"), catalog_txt)
                 if do_vscode:
-                    ms_remote = remote_read(host, f"{machine}/settings.json")
-                    ms_ok = False
-                    if ms_remote:
-                        try:
-                            ms_ok = json.loads(ms_remote).get("claudeCode.environmentVariables") == env_list
-                        except (json.JSONDecodeError, AttributeError):
-                            ms_ok = False
-                    same = same and ms_ok
+                    same = same and old_machine == new_machine
                 if same:
                     log(f"   home={home}  已是最新，跳过 (up to date)")
                     skipped += 1
@@ -828,6 +888,8 @@ def main():
             backs = []
             if do_claude:
                 backs.append(f"{home}/.claude/settings.json")
+            if auth_state_changed:
+                backs.append(auth_state_path)
             if do_codex:
                 backs += [f"{home}/.codex/config.toml", f"{home}/.codex/auth.json",
                           f"{home}/.codex/cc-switch-model-catalog.json"]
@@ -839,6 +901,16 @@ def main():
 
             if do_claude:
                 scp_to(host, tmp / "settings.json", f"{home}/.claude/settings.json")
+            if auth_state_changed:
+                # Detect auth/project state changes since preflight. This narrows
+                # the race window; avoid concurrent config writers during sync.
+                current_auth = json_object(remote_read(host, auth_state_path), auth_state_path)
+                if current_auth != old_auth:
+                    raise RuntimeError("~/.claude.json changed concurrently; retry sync")
+                (tmp / "claude-state.json").write_text(auth_state_txt, encoding="utf-8")
+                staging = auth_state_path + f".sync-{ts}"
+                scp_to(host, tmp / "claude-state.json", staging)
+                ssh(host, f"chmod 600 {shlex.quote(staging)} && mv {shlex.quote(staging)} {shlex.quote(auth_state_path)}")
             if do_codex:
                 scp_to(host, tmp / "config.toml", f"{home}/.codex/config.toml")
                 if auth_txt is not None:
@@ -859,15 +931,7 @@ def main():
                 ssh(host, "; ".join(cmds) + "; true")
 
             if do_vscode:
-                cur = ssh(host, f'cat {shlex.quote(machine + "/settings.json")} 2>/dev/null', check=False).stdout
-                try:
-                    ms = json.loads(cur) if cur.strip() else {}
-                    if not isinstance(ms, dict):
-                        ms = {}
-                except json.JSONDecodeError:
-                    ms = {}
-                ms["claudeCode.environmentVariables"] = env_list
-                (tmp / "machine-settings.json").write_text(json.dumps(ms, indent=4) + "\n")
+                (tmp / "machine-settings.json").write_text(json.dumps(new_machine, indent=4) + "\n")
                 scp_to(host, tmp / "machine-settings.json", f"{machine}/settings.json")
                 ssh(host, f"chmod 600 {shlex.quote(machine + '/settings.json')}; true")
 
@@ -879,6 +943,10 @@ def main():
             verify = ssh(host, " && ".join(checks) + " && echo VERIFY_OK || echo VERIFY_FAIL",
                          check=False).stdout.strip() if checks else "VERIFY_OK"
             log(f"   home={home}  {verify}")
+            if auth_state_txt is not None and not json_equal(remote_read(host, auth_state_path), auth_state_txt):
+                raise RuntimeError("API key approval readback failed")
+            if do_vscode and json_object(remote_read(host, f"{machine}/settings.json"), "Machine settings") != new_machine:
+                raise RuntimeError("Machine settings readback failed")
             if verify != "VERIFY_OK":
                 failures.append(host)
         except Exception as e:

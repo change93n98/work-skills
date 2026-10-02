@@ -1,6 +1,6 @@
 ---
 name: remote-agent-config
-description: Push a Claude Code / Codex model config to remote SSH hosts in ~/.ssh/config so remote agents call the model API directly instead of a reverse tunnel back to the laptop. Also writes the VS Code extension config into a local WSL distro (`--wsl`), where a distro-local cc-switch covers only the CLI and leaves the extension unconfigured. Renders from a chosen cc-switch provider preset (DeepSeek / OpenCode / Xiaomi MiMo / official / ...), so you pick which of several saved providers each server gets. Use whenever the user wants to sync, deploy, or switch claude/codex config on servers or in WSL, get the VS Code Claude Code extension working on a WSL/remote host, choose between cc-switch providers or "换个模型/换个渠道", remove the 127.0.0.1:15721 / RemoteForward dependency, refresh a remote ANTHROPIC_API_KEY or OPENAI_API_KEY, or fix "remote agent dies when laptop closes".
+description: Sync selected local CC Switch Claude Code or Codex presets to SSH hosts for direct API access, or configure the Claude Code VS Code extension in WSL. Use for remote provider/model changes, key refreshes, removing laptop-tunnel dependencies, and plugin login errors after syncing. Includes API key first-use approval and a real Claude conversation probe. Does not change OpenCode's own configuration.
 ---
 
 # remote-agent-config
@@ -19,44 +19,26 @@ SSH tunnel (`RemoteForward 15721`) pointing back at the laptop.
 - need to refresh the model API key on remote hosts
 - a new server was added to `~/.ssh/config`
 
-## Required interaction (do this first)
+## Resolve the user's choices
 
-When this skill is invoked, do **not** pick hosts, targets, or cc-switch presets
-on your own. Ask the user with the `question` tool, and **ask in Chinese** (the
-user is Chinese-speaking). Run `python3 "$S" --list` and
-`python3 "$S" --list-providers` first, and show the available nodes and presets,
-then ask:
+Keep progress and questions in Chinese. Run `sync.py --list` and
+`sync.py --list-providers` to discover SSH aliases and presets. Use the script
+beside this SKILL.md; on Windows invoke it with `python -X utf8`.
 
-1. **节点选择** — question text: `要同步到哪个节点？`
-   - `全部节点` — `~/.ssh/config` 中启用的所有 Host
-   - `指定节点` — 输入别名或 IP 均可，支持逗号分隔多个
-   - `WSL 发行版` — `--list` 输出里 `wsl:<发行版>` 那几行；本机、不走 ssh，
-     且只写 VS Code 扩展的配置（见下方 WSL 一节）
-2. **同步内容** — question text: `要同步哪份配置？` **Ask this only when the
-   target includes at least one ssh host.** A WSL-only target skips it entirely:
-   the distro's own cc-switch already manages its `claude` CLI and its codex, so
-   the only thing worth writing there is the VS Code extension config, which is
-   rendered from the claude preset. Do not ask a codex question for a WSL-only
-   target — there is nothing to write.
-   - `全部（claude + codex）` — 推荐
-   - `仅 Claude`
-   - `仅 Codex`
-3. **cc-switch 预设** — ask once per agent covered by step 2 (so `仅 Claude` asks
-   one question, `全部` asks two, and a **WSL-only target asks exactly one** —
-   Claude):
-   - Claude: question text: `Claude 用哪个 cc-switch 预设？`
-   - Codex: question text: `Codex 用哪个 cc-switch 预设？`
-   - The first option is always `当前激活（<name>）`; then one option per remaining
-     preset from `--list-providers`. Do not reorder or rename the presets.
+Reuse choices already present in the request or conversation. For example,
+“34 节点的 Claude Code 使用本地 cc-switch 配置” means the matching 34 host,
+Claude only, and the currently active Claude preset. State the resolved alias
+and preset before writing; do not repeat questions already answered. Ask only
+for unresolved or ambiguous choices:
 
-A WSL-only run is therefore **two** questions total: 节点 + Claude 预设. Do not
-walk the user through the ssh-shaped questions just because the flow has them.
+- 节点：which SSH alias/IP, all enabled hosts, or a WSL distro.
+- 同步内容：Claude, Codex, or both. WSL-only always means the Claude extension.
+- 预设：current active preset first, then the remaining names in list order.
 
-Then run sync.py with the answers, e.g.
-`--hosts 172.16.240.13 --targets claude --claude-provider DeepSeek`.
-
-Skip the questions only if the user's message already names the host(s), the
-target, and the preset. Keep your own progress messages in Chinese too.
+Inspect the selected target account, run `--dry-run`, and show a concise redacted
+preview before syncing. Never print credentials or API key approval suffixes.
+A request to use a selected key authorizes recording that key's first-use approval;
+a prior explicit rejection is preserved and requires a new user decision.
 
 ## How it works
 
@@ -77,8 +59,11 @@ Mapping, per agent:
   the preset's `modelCatalog`
 
 Also optionally merged: remote `~/.vscode-server/data/Machine/settings.json`
-(`claudeCode.environmentVariables`) so the VS Code extension connects directly
-too.
+(`claudeCode.environmentVariables` and `claudeCode.disableLoginPrompt=true`) so
+the VS Code extension uses external authentication. For Claude presets containing
+an API key, merge its first-use approval into `~/.claude.json` while preserving
+other state. Existing explicit key rejections and malformed JSON stop the sync.
+`--force` does not override those checks.
 
 For each host it: creates dirs, backs up existing files to
 `<file>.bak-YYYYmmdd-HHMMSS`, uploads via `scp`, `chmod 600`, then verifies.
@@ -91,12 +76,13 @@ through the `\\wsl.localhost\<distro>` share and only `chmod` shells out to
 
 This target exists for the case where the distro runs its **own** cc-switch. That
 cc-switch owns `~/.claude/settings.json`, so the `claude` CLI there works fine —
-but the VS Code Claude Code extension does not read that file. It takes its config
-from the server's `~/.vscode-server/data/Machine/settings.json`
-(`claudeCode.environmentVariables`), which cc-switch does not manage. That is the
-file left unconfigured.
+the VS Code Claude Code extension can also have separate environment overrides in
+`~/.vscode-server/data/Machine/settings.json` (`claudeCode.environmentVariables`),
+which cc-switch does not manage. Sync those overrides and the selected key's
+approval so the extension follows the requested provider.
 
-So a WSL target writes **only** the extension file and deliberately leaves
+A WSL target writes the extension file and merges the selected API key’s
+first-use approval into `~/.claude.json`. It deliberately leaves
 `~/.claude/settings.json` alone. Consequence: the extension follows whichever
 preset you pick here, while the CLI keeps following the distro's own cc-switch —
 pick the same provider if you want them to agree. Reload the VS Code window for
@@ -104,11 +90,10 @@ the extension to pick it up.
 
 `--wsl` never fans out to the ssh hosts: a run with `--wsl` and no `--hosts`
 targets the distro alone, and such a run syncs **claude only** — `--targets`
-defaults to `claude` there, since the extension config is the only thing a
-distro receives and it is rendered from the claude preset. Passing `--hosts`
-alongside `--wsl` restores the normal `all` default. The distro's `claude` CLI
-and its codex are left to the distro's own cc-switch; this skill has no business
-writing those.
+defaults to `claude` there, since the extension environment and key approval
+come from the Claude preset. Passing `--hosts`
+alongside `--wsl` restores the normal `all` default. The distro's Claude CLI
+settings and Codex configuration remain managed by its own cc-switch.
 
 ### Choosing a preset
 
@@ -129,8 +114,9 @@ config is usually proxy-managed.
 
 ### Idempotency check
 
-Before touching anything, the script compares the desired config against what is
-already on the remote (JSON is compared structurally, TOML text is normalised).
+Before touching anything, the script compares the desired config, login-prompt
+setting, and selected API key approval against what is already on the remote
+(JSON is compared structurally, TOML text is normalised).
 If everything matches, that host is skipped with `已是最新，跳过 (up to date)` and
 nothing is written or backed up. Pass `--force` to re-write regardless.
 
@@ -170,7 +156,7 @@ python3 "$S" --codex-provider 词易         # pick a codex preset by name
 python3 "$S"                              # all enabled Hosts, both agents, current presets
 python3 "$S" --force                      # re-write even if up to date
 python3 "$S" --exclude 219.145.122.226    # skip the jump box
-python3 "$S" --wsl <发行版>                # WSL: VS Code extension config only (Windows only)
+python3 "$S" --wsl <发行版>                # WSL: extension environment + key approval (Windows only)
 python3 "$S" --env ANTHROPIC_MODEL=deepseek-v4-pro   # override one claude env entry (repeatable)
 python3 "$S" --no-vscode                  # skip Machine/settings.json
 python3 "$S" --from-live                  # legacy: read live files, not presets
@@ -190,7 +176,8 @@ To make this skill available to every agent runtime on Windows, keep a copy in:
 - `%USERPROFILE%\.codex\skills\remote-agent-config\` (Codex)
 - `%USERPROFILE%\.zcode\skills\remote-agent-config\` (zcode)
 
-If you edit one copy, copy the change to the other three.
+If you edit one copy, copy all skill sources (including the verifier and tests)
+to the other three. Do not copy `__pycache__`, credentials, or generated logs.
 
 ## Loopback guard
 
@@ -226,5 +213,63 @@ reachable upstream, or pass `--allow-loopback` if you really mean it.
   Running the skill inside WSL itself cannot reach another distro this way.
 - After changing `~/.vscode-server/data/Machine/settings.json`, the user must
   reload the VS Code window for the extension to pick it up.
-- Existing remote files are backed up, not merged, except the Machine settings
-  JSON which is merged (other keys are preserved).
+- Existing remote files are backed up. Machine settings and `~/.claude.json`
+  are merged to preserve unrelated keys; agent settings are rendered from the preset.
+- Avoid concurrent config writers while syncing (active Claude sessions or another
+  sync). SSH sync checks for changed auth state before replacing it; this is not
+  a cross-process transaction.
+
+
+## Required verification for Claude
+
+A matching file, HTTP 200 from curl, or `claude auth status` showing
+`loggedIn: true` does **not** prove the VS Code client can chat. After syncing,
+run the companion probe once for each selected Claude target:
+
+```bash
+python verify_claude.py --host <ssh-alias>
+python verify_claude.py --wsl <distro>
+```
+
+The probe selects the installed extension's native Claude binary, loads the
+configured environment, sets `CLAUDE_CODE_ENTRYPOINT=claude-vscode`, and makes
+one small real request with tools/hooks disabled and no saved session. It uses
+`/tmp` by default to avoid sending project context and has a bounded timeout.
+This consumes a small amount of provider usage. It only passes when the CLI
+exits successfully and the result is non-error text `OK`. It never prints raw
+CLI logs or credentials. Codex-only sync does not run this probe.
+
+This tests the extension's Claude client, not the VS Code UI. Ask the user to
+reload the **target remote window** and start a new conversation. If the binary
+is missing, the probe times out, or a request fails, report “配置已同步，真实对话验证
+未通过” with the actual reason; do not declare the plugin usable.
+
+### `Not logged in · Please run /login` after reload
+
+Observed in Claude Code 2.1.286: the VS Code client only accepts an environment
+API key after its first-use approval is recorded in `~/.claude.json` under
+`customApiKeyResponses.approved`. The stored identifier is the trimmed key's
+last 20 characters; it is sensitive and must never be printed. The CLI's auth
+status can still report logged in without this approval. `sync.py` now merges
+this state using the selected key and stops on a prior rejection.
+
+`disableLoginPrompt` only hides the login UI; it does not fix missing credentials.
+Do not add OAuth login data or mark unrelated onboarding/trust prompts complete.
+Do not use `ANTHROPIC_AUTH_TOKEN` as a blind workaround or overwrite all of
+`~/.claude.json`. After fixing the selected key approval, repeat the real probe.
+
+If it still fails, inspect the newest
+`~/.vscode-server/data/logs/*/exthost*/Anthropic.claude-code/Claude VSCode.log`,
+actual Claude process environment (key presence/equality only), working directory,
+and project overrides. Filter and redact logs before displaying them. Recheck
+the installed client's behavior if its version differs; approval storage is an
+observed implementation detail, not a promised stable API.
+
+## Maintainer checks
+
+```bash
+python -m unittest discover -s remote-agent-config -p 'test_*.py' -v
+```
+
+Run the skill validator when available, review the redacted dry-run, and execute
+the real probe on an authorized target. Do not embed target credentials in tests.
