@@ -60,7 +60,8 @@ Include 不展开，通配符/多别名/重复 Host 块不自动改写；需要�
 - `MODEL_NOT_TESTED`：连接诊断未调用模型；只有另行用该入口的既有授权完成模型请求，才能宣称推理可用。不要为验证方便把本机登录令牌复制到远程。
 
 出现重连时，先核对该入口的日志是否为 WebSocket 连接失败、是否随后 `falling back to HTTP`，再对照实际代理环境。Linux 的 CLI 启动器已显式设置代理环境；不要因 Windows 上的复现就给所有远程节点关闭 WebSocket。
-只有证明该节点的 WebSocket 路径失败而 HTTP 路径成功后，才针对选定入口配置 `supports_websockets=false`，保留原模型、供应商和认证。内置供应商 ID `openai` 不能直接覆盖；检查当前版本和配置后处理，不照搬整个本机配置。
+先验证显式代理是否能修复 WebSocket；只有代理路径仍失败而 HTTP 路径成功后，才考虑针对选定入口配置 `supports_websockets=false`。这个选项只作用于实际选中的供应商；恢复旧聊天可能沿用旧供应商，不能用新 CLI 会话的成功替代旧聊天验证。保留原模型和认证，内置供应商 ID `openai` 不能直接覆盖。
+用户同时要求排查本机 Windows 桌面端的启动重连时，读 [Windows 桌面重连排查](references/windows-reconnect.md)。这是条件排查说明；执行远程配置时不自动修改本机的用户级代理环境。
 侧栏需重新连接 Remote-SSH 并重载窗口，不能把 CLI 测试当作实际侧栏 UI 验证。
 若有失败，报告具体节点，检查原因后只重试该节点；不要反复原样重试。
 
