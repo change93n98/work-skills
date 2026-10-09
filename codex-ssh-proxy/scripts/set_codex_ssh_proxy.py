@@ -204,7 +204,10 @@ def main():
             failed.append(node)
     if failed:
         raise RuntimeError('Failed nodes: ' + ', '.join(failed) + '. Successful nodes remain configured; retry only failed targets.')
-    print('DONE: keep the local proxy online, reconnect SSH / Remote-SSH, then reload the VS Code window.')
+    if args.check_only:
+        print('CHECK_DONE: no configuration was changed; MODEL_NOT_TESTED means inference is unverified.')
+    else:
+        print('DONE: keep the local proxy online, reconnect SSH / Remote-SSH, then reload the VS Code window.')
     return 0
 
 
