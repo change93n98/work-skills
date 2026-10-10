@@ -119,34 +119,51 @@ ssh <别名> 'df -h <路径>; findmnt -no SOURCE,FSTYPE <路径>; hostname'
 
 ```bash
 # 太初系
-ssh <别名> 'docker exec <容器名> bash -c "source /opt/tecoai/setvars.sh; python -c \"import torch_sdaa\" && echo PYTORCH_OK"'
+ssh <别名> 'docker exec <容器名> bash -ic "python -c \"import torch_sdaa\" && echo PYTORCH_OK"'
 ssh <别名> 'docker exec <容器名> teco-smi -c 2>&1 | head -30'   # Health 列全 OK 即通过
 
 # NVIDIA
 ssh <别名> 'docker exec <容器名> nvidia-smi'
-ssh <别名> 'docker exec <容器名> python -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"'
+ssh <别名> 'docker exec <容器名> bash -ic "python -c \"import torch; print(torch.cuda.is_available(), torch.cuda.device_count())\""'
 ```
 
-- import 失败先看容器内 conda 环境（不同镜像默认环境不同，映射见 `references/create-containers.md`）。
+- 验证框架也使用第 5 节的 `bash -ic`，沿用 `.bashrc` 中的环境初始化。import 失败先查
+  `command -v python`、`CONDA_DEFAULT_ENV` 与 `conda env list`；仅确认初始化缺失或环境不符时
+  补充激活（不同镜像环境的候选映射见 `references/create-containers.md`）。
 - 容器内 `teco-smi -c` 显示的进程 PID 是**宿主机 PID**，与容器内 `ps` 不一致，属正常，不是环境问题。
 - 验证失败排查顺序：镜像内框架版本 vs 宿主驱动版本 → 设备是否真映射进容器 → 报告卡点。
   **不要伪造"看起来成功"**。
 
 ## 5. 容器内执行任务
 
+**首选 `docker exec <容器名> bash -ic '<命令>'`**。交互式、非登录 Bash 会读取当前容器用户的
+`~/.bashrc`，环境初始化行为对齐 `docker exec -it <容器名> bash` 后输入命令。
+沿用当前会话指定的容器用户、工作目录与环境覆盖；显式需要时用 `docker exec -u ... -w ... -e ...`。
+
+- `.bashrc` 已配置 conda / 工具链时，直接执行任务，不重复添加 `source .../conda.sh`、
+  `conda activate ...` 或厂商 `setvars.sh`，也不根据之前某个容器写死环境名。
+- 仅当 `bash -ic` 下探测发现初始化未生效、用户要求另一个环境，或任务明确需要干净/登录 shell 时，
+  才显式激活或改用 `bash -c` / `bash -lc`；说明依据，避免默默退回旧模板。
+- 自动化执行不加 `-t`；`-i` 只用于传入 stdin。`bash -ic` 无 TTY 时可能提示
+  `cannot set terminal process group` / `no job control`，这些提示本身不代表任务失败；按退出码与日志判定，
+  保留 stderr 以便看到真实错误。确需终端交互时才使用 SSH TTY 与 `docker exec -it`。
+
 长任务一律**后台 + 日志落盘 + 打印 pid**；前台阻塞会把 agent 挂住。
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec -i <容器名> bash -s' <<'EOF'
-cd <容器内工作目录>
-nohup bash <启动脚本> > <容器内日志路径> 2>&1 &
+ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec -i <容器名> bash -ic "source /dev/stdin"' <<'EOF'
+cd <容器内工作目录> || exit 1
+nohup bash <启动脚本> > <容器内日志路径> 2>&1 < /dev/null &
 echo "pid=$!"
 EOF
 ```
 
-- **用 `docker exec -i ... bash -s` + heredoc**，不要 `ssh '<别名>' 'docker exec <容器> bash -c "..."'`：
-  后者是 ssh → docker → bash 三层引号嵌套，命令里再有一个引号就会解析错。
-  实测 heredoc 形态稳；命令里含引号时优先用它。
+- **多行或含复杂引号时用 `docker exec -i ... bash -ic "source /dev/stdin"` + 带引号的 heredoc**：
+  先由交互式 Bash 读取 `.bashrc`，再在同一个 shell 中执行 stdin，避免三层命令引号嵌套。
+  不要改成 `bash -s` 或 `bash -ic "bash -s"`，以免丢失交互式初始化或 shell 函数。
+  heredoc 是本地 Bash 写法；PowerShell 下用原样多行字符串经 stdin 传给同一命令，保留容器端的 `$` 与引号。
+- 后台脚本继承该 shell 已导出的 conda / 工具链环境；关闭后台进程 stdin，避免占用下发脚本的输入。
+  脚本内若自行启动 `bash -lc` 或重置环境，需检查该脚本；仅确需再次初始化时才使用交互式子 shell。
 - 日志与产物必须落在**容器挂载目录内**（否则容器重建即丢）。先查第 2 节的挂载映射，
   汇报时给容器内和宿主两个路径。
 - 只动用户自己的容器/进程。要 kill 别人或不确定归属的进程，先问。
@@ -164,7 +181,7 @@ EOF
 4. **增量测速**（对下载、写盘、生成类任务最有效——**看增量，不看瞬时**）：
 
 ```bash
-ssh <别名> 'docker exec -i <容器> bash -s' <<'EOF'
+ssh <别名> 'docker exec -i <容器> bash -ic "source /dev/stdin"' <<'EOF'
 F=<被观察的文件>
 a=$(stat -c %s "$F"); sleep 20; b=$(stat -c %s "$F")
 echo "$(( (b-a)/20/1024 )) KB/s  当前 $(( b/1048576 )) MB  增量 $(( b-a )) B"

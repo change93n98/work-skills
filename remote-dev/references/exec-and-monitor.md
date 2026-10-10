@@ -3,6 +3,11 @@
 配合 SKILL.md 第 5–7 节使用。所有命令都在**容器内**执行，节点名一律用 `<别名>` 占位——
 别名从 `~/.ssh/config` 现取，不要抄某个具体节点。
 
+需要 Python、conda 或工具链环境的命令，沿用 SKILL.md 第 5 节：首选 `bash -ic`，
+复杂命令用 `docker exec -i ... bash -ic "source /dev/stdin"` 配合带引号的 heredoc。
+让 `.bashrc` 完成初始化，已生效时不再补 `source .../conda.sh` 或 `conda activate ...`。
+`ps`、`cat`、`tail` 等不依赖 shell 初始化的只读命令可以继续直接 `docker exec`。
+
 ## 一、先找到"任务是什么"
 
 用户说"有个任务在跑，看下进度"时，先别猜，按这条链找：
@@ -37,7 +42,7 @@ ssh <别名> 'docker exec <容器> tail -n 25 <当前阶段日志>'
 四步（进程 → 日志 → 产物 → 增量）见 SKILL.md 第 6 节。增量测速模板（可直接用）：
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec -i <容器> bash -s' <<'EOF'
+ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec -i <容器> bash -ic "source /dev/stdin"' <<'EOF'
 F=<被观察的文件>
 TOTAL=<预期总大小，字节；不知道就不填>
 a=$(stat -c %s "$F" 2>/dev/null) || { echo "文件不存在: $F"; exit 1; }
@@ -95,7 +100,7 @@ ssh <别名> 'docker exec <容器> tail -n 40 <日志> | grep -iE "error|oom|kil
 ssh <别名> 'docker exec <容器> jq -c "{score,num,metrics:[.metrics[]|{name,score,num}]}" <reports 目录>/<模型名>/<数据集>.json'
 
 # jq 不存在时用 python3——注意 heredoc 形态，别嵌引号
-ssh <别名> 'docker exec -i <容器> bash -s' <<'EOF'
+ssh <别名> 'docker exec -i <容器> bash -ic "source /dev/stdin"' <<'EOF'
 python3 - <<'PY'
 import json, glob
 for p in glob.glob('<reports 目录>/*/*.json'):

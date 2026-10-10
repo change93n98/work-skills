@@ -8,10 +8,11 @@
 
 - 容器命名 `<用户名>-<卡型>-dev`（用户名取摸底时的 `whoami`，不要预设）。
 - `-v` 的容器内路径**不要落在 `/mnt` 下**（太初官方文档提醒会影响数据集路径）。
-- 长命令优先用 heredoc 形态下发，避免 ssh → docker → bash 三层引号嵌套：
+- 容器内执行首选 `bash -ic`，由 `.bashrc` 初始化环境（见 SKILL.md 第 5 节）。
+  长命令优先用 heredoc 形态下发，避免 ssh → docker → bash 三层引号嵌套：
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec -i <容器名> bash -s' <<'EOF'
+ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec -i <容器名> bash -ic "source /dev/stdin"' <<'EOF'
 <要执行的命令>
 EOF
 ```
@@ -89,7 +90,9 @@ docker run -itd --name=<容器名> --net=host --ipc=host $DEVS \
 
 ### 容器内验证 / conda 环境
 
-不同镜像默认环境不同，import 失败先看 `conda env list`，再按镜像类型激活：
+先在 `bash -ic` 中验证框架；若 `.bashrc` 已激活合适环境，直接执行，不再重复激活。
+不同镜像默认环境不同，import 失败先查 `command -v python`、`CONDA_DEFAULT_ENV` 与
+`conda env list`。下表仅是排查时的候选，以当前容器实际环境为准：
 
 | 镜像类型 | 激活 | 验证 |
 | --- | --- | --- |
@@ -98,9 +101,12 @@ docker run -itd --name=<容器名> --net=host --ipc=host $DEVS \
 | TecoPaddle | `conda activate paddle_env_py310` | `import paddle_sdaa` |
 
 ```bash
-ssh <别名> 'docker exec <容器名> bash -c "source /opt/tecoai/setvars.sh; python -c \"import torch_sdaa\" && echo PYTORCH_OK"'
+ssh <别名> 'docker exec <容器名> bash -ic "python -c \"import torch_sdaa\" && echo PYTORCH_OK"'
 ssh <别名> 'docker exec <容器名> teco-smi -c 2>&1 | head -30'   # Health 列全 OK 即通过
 ```
+
+仅确认 `.bashrc` 未初始化所需环境时，才补充实际 conda 安装下的初始化脚本、
+`conda activate <实际环境>` 或 `/opt/tecoai/setvars.sh`。
 
 容器内 `teco-smi -c` 显示的进程 PID 是宿主机 PID，与容器内 `ps` 不一致，属正常（官方 FAQ）。
 
