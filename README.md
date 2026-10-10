@@ -16,7 +16,7 @@ Claude Code / Codex 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)**
 | [prof-analy](#skill-3-prof-analy---模型性能分析) | 解析 PyTorch profiling trace，按算子类别（gemm / attention / conv 等）汇总耗时并生成报告 |
 | [reliable-task-execution](#skill-7-reliable-task-execution---可靠任务执行) | 按任务风险自适应选择 Quick / Standard / Extended 流程，建立可恢复计划、分层验证和基于证据的完成状态 |
 | [remote-agent-config](#skill-5-remote-agent-config---远程-agent-配置同步) | 从 cc-switch 预设渲染 Claude Code / Codex 配置并推送到远程节点，直连模型 API、摆脱反向 SSH 隧道；亦可把 VS Code 扩展配置写进本机 WSL |
-| [remote-dev](#skill-9-remote-dev---远程开发容器) | SSH 到加速卡节点，检查 / 复用 / 创建并验证 Docker 开发容器（太初 / NVIDIA / 通用兜底） |
+| [remote-dev](#skill-9-remote-dev---远程开发容器) | 从电脑或远程节点通过 SSH 准备 Docker 容器、派发任务并检查进度与结果（太初 / NVIDIA / 通用兜底） |
 | [ssh-docker](#skill-4-ssh-docker---远程-ssh-docker-工作流) | 通过 SSH + `docker exec` 在远程容器执行编译 / 测试 / profiling，代码本地编辑再同步 |
 
 其余章节：[安装](#安装) · [项目结构](#项目结构) · [依赖](#依赖) · [许可证](#许可证) · [作者](#作者)
@@ -407,7 +407,7 @@ $reliable-task-execution
 
 ### 功能
 
-SSH 到远程加速卡节点，**检查 / 复用 / 创建并验证 Docker 开发容器**，把「本地开发、远程容器里验证运行」的环境准备好。只负责容器就绪与验证，跑实验、同步代码不在范围内。
+从个人电脑或远程节点通过 SSH 到执行节点，**检查 / 复用 / 创建并验证 Docker 开发容器，在容器内启动任务、检查进度并读取结果**。支持“从 A 节点给 B 节点派发任务”，沿用发起机器的 SSH 配置与跳板路由；实验脚本编写、代码同步和另一 agent 的自主任务分配不在范围内。
 
 ### 核心特性
 
@@ -417,20 +417,23 @@ SSH 到远程加速卡节点，**检查 / 复用 / 创建并验证 Docker 开发
 | 三卡型分支 | 太初（`teco-smi`、`/dev/tcaicard*`、官方 tar 镜像）／NVIDIA（`--gpus`、NGC 镜像）／昇腾·寒武纪通用兜底（试验性） |
 | 驱动-镜像匹配 | 按宿主 TecoDriver 版本对照兼容表选 TecoToolKit 镜像；容器与宿主驱动版本必须一致，对不上先换镜像不硬建 |
 | 容内验证 | `import torch_sdaa` / `torch.cuda.is_available()` + `teco-smi -c` 卡健康；失败按排查顺序如实报卡点，不伪造「看起来成功」 |
-| 边界清晰 | 到「容器就绪并验证通过」为止；卡占用反查让位给 `who-use-gpu`，跑实验交给下游 skill |
+| 节点间派发 | 区分发起机器、执行节点与目标容器，使用发起机器的 SSH 配置，在执行节点检查设备、进程、日志和结果 |
+| 环境初始化 | 容器任务首选 `bash -ic` 读取 `.bashrc`，已初始化的 conda / 工具链不重复激活 |
+| 边界清晰 | 到「任务跑起来、确认状态与结果位置」为止；卡占用反查用 `who-use-gpu`，脚本编写和代码同步交给相应 skill |
 
 ### 触发词
 
-`开个开发容器`、`在 XX 节点建容器 / 进容器`、`没有容器就建一个`、`准备远程开发环境`、`XX 节点有哪些容器`、`remote-dev`
+`开个开发容器`、`在 XX 节点建容器 / 进容器`、`没有容器就建一个`、`准备远程开发环境`、`XX 节点有哪些容器`、`从 A 节点给 B 节点派发任务`、`看下任务进度`、`remote-dev`
 
 ### 输入
 
-- **节点**：从 `~/.ssh/config` 读 Host 别名（sdaa 集群 65056 端口，H100 要过跳板机），只有用户完全没提节点时才列别名问一次
+- **执行节点**：从发起机器的 `~/.ssh/config`（含 `Include`）读 Host 别名、端口和跳板路由，只有用户完全没提目标节点时才列别名问一次
+- **发起机器**：默认 agent 当前所在机器；用户明确指定“从 A 发起”时，在 A 上解析配置并连接执行节点
 - **可选**：容器名、镜像、挂载路径 —— 缺关键参数才问，且连同摸底结论（空闲卡、现成镜像、驱动版本）一起问
 
 ### 输出
 
-- 证据表：节点 / 容器 / 镜像 / 挂载卡 / 验证结果 / 挂载路径
+- 证据表：发起机器与路由 / 执行节点及宿主机身份 / 容器 / 镜像与卡 / 工作路径 / 日志 / 进度 / 状态 / 结果
 - 进入命令：`docker exec -it <容器名> bash`，以及 VSCode Dev Containers **Attach**（零侵入，推荐）或容器内 sshd（仅明确要求时）
 
 ---

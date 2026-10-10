@@ -1,7 +1,9 @@
 # 执行任务与盯进度：命令集
 
-配合 SKILL.md 第 5–7 节使用。所有命令都在**容器内**执行，节点名一律用 `<别名>` 占位——
-别名从 `~/.ssh/config` 现取，不要抄某个具体节点。
+配合 SKILL.md 第 5–7 节使用。外层 SSH 在**发起机器**运行；Docker 在**执行节点宿主机**运行；
+`docker exec` 的任务和读取命令在该节点的**容器内**运行。
+`<别名>` 从发起机器的 `~/.ssh/config`（含 `Include`）现取，始终指执行节点。
+跨节点派发的路由与身份确认见 `node-dispatch.md`，不要抄某个具体节点或改在发起节点检查同名容器。
 
 需要 Python、conda 或工具链环境的命令，沿用 SKILL.md 第 5 节：首选 `bash -ic`，
 复杂命令用 `docker exec -i ... bash -ic "source /dev/stdin"` 配合带引号的 heredoc。

@@ -1,17 +1,17 @@
 ---
 name: remote-dev
-description: 在 ~/.ssh/config 里的任意远程节点上准备/复用 Docker 开发容器，并在容器内执行任务、盯进度、取结果状态。当用户说"开个开发容器"、"XX节点建容器/进容器"、"准备远程开发环境"、"XX节点有哪些容器/我的容器"、"在XX节点跑/起个任务"、"看下任务进度/跑到哪了/完成了没"、"结果在哪/精度多少"、"VS Code 怎么连这个节点/远程开发"时使用；用户提到节点就直接连上去摸底执行，不要反问等确认；节点从 ~/.ssh/config 动态读取，不维护固定清单，只有用户完全没提节点时才列别名让用户选。
+description: 从个人电脑或远程节点通过 SSH 在目标节点准备/复用 Docker 开发容器，执行任务、盯进度、取结果状态。适用于"开个开发容器"、"XX节点建容器/进容器"、"准备远程开发环境"、"XX节点有哪些容器/我的容器"、"在XX节点跑/起个任务"、"从A节点给B节点派发任务"、"看下任务进度/跑到哪了/完成了没"、"结果在哪/精度多少"、"VS Code 怎么连这个节点/远程开发"。用户提到目标节点就直接摸底执行；从发起机器的 ~/.ssh/config 动态解析节点与跳板路由，不维护固定清单。派发指 SSH 启动程序，不负责向另一 agent 分配自主任务。
 ---
 
 # 远程节点：容器准备 / 执行 / 盯进度
 
-目标：本机 agent 一路走到底——在用户指定的节点上准备好容器（有则复用/启动，没有则建），
+目标：由个人电脑或远程节点上的 agent 一路走到底——在用户指定的执行节点上准备好容器（有则复用/启动，没有则建），
 在容器内把任务跑起来，盯住进度，给出结果与状态。
 **节点上绝大多数任务都在 docker 内跑**，所以一切以容器为单位，宿主只做摸底与 docker 操作。
 
 两条硬规则：
 
-1. **不写死节点**。节点清单的唯一来源是 `~/.ssh/config`；卡型、驱动、docker、挂载、
+1. **不写死节点**。节点配置从发起机器的 `~/.ssh/config`（含 `Include`）动态解析；卡型、驱动、docker、挂载、
    存储共享关系全部连上去现探。skill 里不保存任何节点名、端口、跳板机、路径、用户名的既定事实。
 2. **探测驱动分支**。太初 / NVIDIA / 其他兜底三套建容器模板由摸底结果决定用哪套，
    不是由节点叫什么决定。
@@ -20,6 +20,7 @@ description: 在 ~/.ssh/config 里的任意远程节点上准备/复用 Docker �
 
 - 建容器三套模板、镜像匹配与导入、容器内验证细节：`references/create-containers.md`
 - 执行/监控命令集、进度判定表、增量测速、结果读取实例：`references/exec-and-monitor.md`
+- 从一个远程节点给另一个节点派发任务、排查 SSH 路由与执行位置：`references/node-dispatch.md`
 
 ## 0. 执行原则：说到就干
 
@@ -29,9 +30,23 @@ description: 在 ~/.ssh/config 里的任意远程节点上准备/复用 Docker �
   把摸底结论（空闲卡、现成镜像、驱动版本）连同默认建议**一次性**问完。
 - 容器名/类型不用开局就问：摸底结果里通常能对出来。
 
+### 先确定发起位置与执行位置
+
+- **发起机器**：实际运行 SSH 客户端的机器，可以是个人电脑或远程节点。未指定发起位置时，
+  使用 agent 当前所在的机器；用户说“从 A 给 B 派任务”时，发起机器是 A，执行节点是 B。
+- agent 已在 A 上时直接执行 `ssh <B的别名> ...`。agent 在其他机器且用户明确要求从 A 发起时，
+  先连接 A，在 A 上读取 SSH 配置并发起到 B 的连接；不要拿电脑的配置代替 A 的配置。
+- 第 2–6 节的 Docker、设备检查、进程和结果读取都在**执行节点**上进行；代码中的 `<别名>`
+  均指发起机器配置中解析出的执行节点别名。裸 `docker ...` 片段须放在执行节点宿主机 shell 中。
+  执行节点就是当前机器时可直接操作已确认的本机 Docker，无需再 SSH 回自己。
+- 启动任务前，在执行节点宿主机确认 `hostname`、`whoami` 和 Docker 访问权限；
+  容器内的 `hostname` 可能不同，不能拿它替代宿主机身份。容器、GPU、PID、挂载和路径都绑定执行节点。
+- 节点间派发的路由检查与示例见 `references/node-dispatch.md`，按需读取。
+
 ## 1. 解析节点（不写死）
 
-唯一来源 `~/.ssh/config`。枚举别名（跳过注释行与通配符）：
+在**发起机器**读取 `~/.ssh/config`；若有 `Include`，同时检查相关配置文件。
+下例只枚举当前文件的显式别名（跳过注释行与通配符），并非完整的 SSH 配置解析器：
 
 ```bash
 grep -iE "^[[:space:]]*Host[[:space:]]+" ~/.ssh/config \
@@ -40,12 +55,15 @@ grep -iE "^[[:space:]]*Host[[:space:]]+" ~/.ssh/config \
 
 - 用户给了 IP 或别名 → 先在 config 里找对应 Host 块，**用别名连接**。别名自动携带
   Port / ProxyJump / IdentityFile；裸 IP 直连会漏掉端口与跳板机。
-- 找不到别名才兜底：`ssh -o BatchMode=yes -o ConnectTimeout=15 <ip>`。
+- 首选配置中已有的 `ProxyJump` / `ProxyCommand` 路由，不因目标私网 IP 直连超时而认定目标不可达。
+  不用 `ssh -F /dev/null`、Windows 的 `-F NUL` 或覆盖代理选项来绕开现有路由。
+- 找不到别名时，先检查 `Include` 和用户已提供的用户名、端口、跳板信息；只有确认无需特殊路由时
+  才兜底 `ssh -o BatchMode=yes -o ConnectTimeout=15 <ip>`。缺少必要连接信息时报告并询问，不能猜。
 - 用户完全没给节点 → 把别名列成文本表让用户挑。**用文本列出，不要用四选项弹窗**：
   节点数常超过 4 个，弹窗还会挡住对话。
-- 需要复核有效参数：`ssh -G <别名> | grep -iE "^(hostname|port|user|proxyjump)"`。
-- 连接时 stderr 若出现 `Warning: remote port forwarding failed for listen port 15721`，
-  属正常（config 里残留的 `RemoteForward` 所致），忽略即可，不要当成连接失败。
+- 需要复核有效参数：`ssh -G <别名> | grep -iE "^(hostname|port|user|proxyjump|proxycommand|identityfile) "`。
+- 只执行命令且无需配置中的端口转发时，可加 `-o ClearAllForwardings=yes`，保留别名与跳板路由。
+  端口转发警告是否影响任务取决于是否依赖该转发；按 SSH 退出码和远端命令结果判断连接成功。
 
 ## 2. 摸底节点（一条命令拿全）
 
@@ -53,13 +71,13 @@ grep -iE "^[[:space:]]*Host[[:space:]]+" ~/.ssh/config \
 ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> '
   echo "=== 卡型 ==="; command -v nvidia-smi; command -v teco-smi; ls /opt/tecoai/bin/teco-smi 2>/dev/null
   echo "=== docker ==="; docker --version 2>&1
-  echo "=== 身份 ==="; whoami; echo "$HOME"
+  echo "=== 身份 ==="; hostname; whoami; echo "$HOME"
   echo "=== 容器 ==="; docker ps -a --format "table {{.Names}}\t{{.Image}}\t{{.Status}}" 2>&1 | head -40
   echo "=== 宿主在跑的重活 ==="; ps -eo pid,etime,pcpu,args --sort=-pcpu 2>/dev/null | head -12
 '
 ```
 
-- `whoami` / `$HOME` 用于后面拼路径和判断归属，**不要预设用户名**。
+- `hostname` 确认执行节点；`whoami` / `$HOME` 用于后面拼路径和判断归属，**不要预设用户名**。
 - `docker ps` 报 `permission denied` → 改 `sudo -n docker ...`，后续都带 `sudo -n`。
 - 节点没装 docker → 属宿主机管理操作，报告并停止，不要代装。
 
@@ -149,6 +167,7 @@ ssh <别名> 'docker exec <容器名> bash -ic "python -c \"import torch; print(
   保留 stderr 以便看到真实错误。确需终端交互时才使用 SSH TTY 与 `docker exec -it`。
 
 长任务一律**后台 + 日志落盘 + 打印 pid**；前台阻塞会把 agent 挂住。
+以下 SSH 命令在发起机器上运行，`nohup` 在执行节点的容器内启动，日志也写在该容器的挂载目录。
 
 ```bash
 ssh -o BatchMode=yes -o ConnectTimeout=15 <别名> 'docker exec -i <容器名> bash -ic "source /dev/stdin"' <<'EOF'
@@ -173,6 +192,7 @@ EOF
 ## 6. 盯进度
 
 四步，**从粗到细，先判断"在不在动"再谈"到哪了"**：
+跨节点派发后，沿用同一执行节点、容器和 SSH 路由检查；发起节点的进程或同名目录不能作为任务进度证据。
 
 1. **进程还在不在**：`docker exec <容器> ps -eo pid,ppid,etime,pcpu,args --sort=-pcpu | head`
    看 `etime`（跑了多久）、有没有 `<defunct>`（僵尸不算在跑）。
@@ -210,7 +230,8 @@ EOF
 
 | 项目 | 值 |
 | --- | --- |
-| 节点 | 别名 + `hostname`（多节点共享存储时必须给，用于区分结果来源） |
+| 发起位置 / 路由 | 发起机器；直连或有效配置中的跳板路由（跨节点派发时填写） |
+| 执行节点 | 发起机器配置中的别名 + 宿主机 `hostname`（用于区分结果来源） |
 | 容器 | 名字 + running/exited |
 | 镜像 / 卡 | 镜像 tag；占用卡号（Bus-Id + Index） |
 | 任务 | 启动脚本 + 计算位置（容器内路径） |
@@ -219,7 +240,8 @@ EOF
 | 状态 | running / 卡住 / 完成 / 失败（+ rc） |
 | 结果 | 产物目录 + 关键指标（有则给） |
 
-后续别的 skill 要接手时，移交这三样就够：**节点别名 + 容器名 + 容器内工作路径**。
+后续别的 skill 要接手时，移交：**执行节点别名 + 宿主机 hostname + 容器名 + 容器内工作路径**。
+跨节点派发还需发起机器与 SSH 路由，接手方应在自己的发起位置重新解析别名，不能假设各机器配置相同。
 
 ## 8. VS Code / 远程开发接入
 
@@ -246,5 +268,6 @@ EOF
   它们会抢 I/O 并污染后来的进度判断。摸底时留意，报告但不擅自动手。
 
 边界：本 skill 到"任务跑起来、盯到状态、给出结果位置"为止。写实验脚本、代码同步策略
-不属于这里（`ssh-docker` 有编译/测试/调试模板）。本 skill 的输出（节点别名 + 容器名 +
-工作路径）供后续 skill 接手引用。
+不属于这里（`ssh-docker` 有编译/测试/调试模板）。本 skill 的输出（执行节点别名 + 宿主机 hostname +
+容器名 + 工作路径，以及跨节点派发的发起机器与路由）供后续 skill 接手引用。
+本 skill 的“派发”通过 SSH 在目标容器启动程序；向另一 agent 分配自主任务需独立的 agent 协调机制。
