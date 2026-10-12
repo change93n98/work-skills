@@ -1,62 +1,79 @@
-# Kernel 分类规则与平台适配
+# 独立 kernel 分类规则产物
 
-`prof_analyze.py` 与 `prof_analyze_perfetto.py` 共用 `scripts/kernel_categories.py`，避免两种解析路径的分类结果不一致。输出继续保持六个稳定类别：
+唯一规则产物是 `rules/kernel-classification-rules.json`。Python 加载器只负责读取、校验和匹配，不维护另一份硬编码正则表。JSON 可单独复制、版本管理或由其他分类程序读取。
 
-- `gemm`
-- `通信 (comm)`
-- `FlashAttention (fa)`
-- `Triton`
-- `其他elementwise`
-- `memcpy/memset`
+## 选择文件和平台
 
-未知但有效的计算 kernel 仍归入 `其他elementwise`，以兼容已有 Excel/JSON 消费方，但会标记 `fallback:unknown`，必须通过 audit 报告复核。运行时等待标记不计为计算 kernel。
-
-## 平台命名覆盖
-
-### ROCm / DCU
-
-识别 rocBLAS、hipBLASLt、CK GEMM/FMHA、RCCL、HIP memcpy/memset 等命名。
-
-### NVIDIA
-
-识别 cuBLAS/cuBLASLt、NVJet、CUTLASS、FlashAttention、NCCL、Triton 和 CUDA memcpy/memset。CUTLASS FlashAttention 会先按 attention 识别，其余 CUTLASS kernel 按 GEMM 处理。
-
-### 太初 T100
-
-当前规则基于真实 T100 trace 覆盖以下常见前缀和模式：
-
-| 类别 | 典型模式 |
-|---|---|
-| GEMM | `tecoblas::*teco_slave_gemm*`、`slave_gemm_*`、`slave_mm_*`、`GemmWrapArgs` |
-| 通信 | `tccl_*`、`allReduce`、`all_gather`、`reduce_scatter` |
-| Attention | `teco_slave_flash_attention*`、`fused_block_attention*`、`block_attention*` |
-| Elementwise/融合算子 | `tecolmk_slave_fused_norm*`、`ffn_layer_general*`、`causal_conv1d*`、DeltaRule、`fused_qk_gemma_norm_mrope`、sampling、rope、softmax |
-| 内存操作 | `sdaart::sdaaMemcpy*`、`copy_stride_dma*`、`set_tensor` |
-| 非计算标记 | 精确 `WAIT` 和明确 profiler marker 会排除，由 phase window 与 kernel busy time 的差值体现在 bubble 中 |
-
-若新增 T100 kernel 大量落入 `其他elementwise`，先按总耗时排序检查名称，再只添加稳定的库/算子模式；不要按一次运行中的完整模板实例名逐条硬编码。
-
-## 分类优先级
-
-1. profiler/WAIT 等排除项；
-2. 通信融合 kernel（例如 GEMM+all-reduce）；
-3. FlashAttention/分页 attention；
-4. NVIDIA CUTLASS 非 attention kernel；
-5. 六类模式表；
-6. 未知有效 kernel 回退到 `其他elementwise`。
-
-修改规则后至少执行：
+四个入口 `prof_analyze.py`、`prof_analyze_perfetto.py`、`prof_graph_analyze.py`、`audit_kernel_categories.py` 共用参数：
 
 ```bash
-python scripts/test_kernel_categories.py
-python scripts/prof_analyze.py --trace-file <t100-trace.json.gz> --output-dir <output-dir> --verbose
+python3 scripts/prof_analyze.py \
+  --trace-file trace.json.gz --output-dir analysis \
+  --kernel-rules rules/kernel-classification-rules.json --platform teco
 ```
 
-同时使用一个已有 NVIDIA 或 DCU trace 做回归，确认原分类未被 T100 规则抢占。
+- nv：通用 + NVIDIA。
+- dcu：通用 + DCU/ROCm。
+- teco：通用 + 太初/SDAA。
+- auto（默认）：全部分组，兼容混合名字；不探测设备厂商。
 
-## 已发现并防止的误判
+省略文件参数时按脚本位置读取 skill 的 JSON，与当前工作目录无关。platform 是规则分组开关，不是厂商名字过滤器；通用词也可能匹配其他平台。已知设备时明确选平台。
 
-- `gemma` 不是 `gemm`：`fused_qk_gemma_norm_mrope` 由本地 tecovllm 代码证明是 norm/rope 融合。
-- T100 `tecodnn::*broadcast_add`、`no_broadcast_*`、`masked_fill_*` 是单卡逐元素 kernel，不是通信；通信必须有 TCCL/NCCL/RCCL 或明确 collective 名。
-- `prefill_cache`、`reshape_and_cache_flash`、`block_kv_gather` 是 KV cache/layout，不是 FlashAttention。
-- CUTLASS 需要先判断 `FlashAttn` 和 `DeltaRule`，剩余明确矩阵乘路径才按 GEMM 兜底。
+其他代码复用加载器（先将 skill 的 scripts 目录加入 Python 导入路径）：
+
+```python
+from kernel_categories import KernelClassifier
+classifier = KernelClassifier("/path/kernel-classification-rules.json", platform="teco")
+result = classifier.classify_detail(kernel_name)
+```
+
+修改文件后新建 classifier 或调用 configure_classifier；不会在分析途中静默重载。所有报告记录文件路径、SHA256、version、platform。
+
+## 结构与解释
+
+顶层含 schema_version、version、固定六类 categories、fallback、platforms，以及仅供展示的 compatibility_keywords / exclude_hints。platforms 必须含 common、nv、dcu、teco。
+
+| 字段 | 含义 |
+| --- | --- |
+| id / reason | 唯一规则 ID / 匹配原因 |
+| priority | 数字越小越先匹配；同值按文件的分组与规则顺序 |
+| patterns | 大小写不敏感的 Python 正则数组，任一命中 |
+| category | 六类兼容桶，null 表示运行时/profiler 排除 |
+| semantic_type | fused_ffn、kv_cache_layout、linear_attention_state_update 等语义细分 |
+| evidence | 审阅过的源码/API/知识库或快照 |
+| confidence | high/medium/low/unknown，证据强度，不是概率 |
+| ambiguity_reasons | 未决语义和命名歧义 |
+| category_candidates | 可选的其他候选桶 |
+| notes | 限制、版本和预期但未观察到的家族 |
+
+自动分类仍依据名字。evidence 不是当前 invocation 的运行时调用栈证明。错误 JSON、重复 key/ID、非法类别和正则明确失败，不回退旧规则。
+
+六类保持 gemm、通信 (comm)、FlashAttention (fa)、Triton、其他elementwise、memcpy/memset。“其他elementwise”是历史兼容桶，包含归约、卷积、采样、cache/layout、DeltaRule，并不代表全部逐元素。GEMV、融合 GEMM+激活/norm、融合双投影 FFN 归 GEMM，但使用相应语义子类型。
+
+fallback:unknown 保留其他桶、confidence=unknown。词法全命中不等于语义全验证。源码明确的厂商例外、通信/内存/attention、明确 GEMM 家族应先于泛 activation/layout；以 JSON priority 为准。
+
+## 重要例外
+
+- Teco ffn_layer_general_fused_for_small 是双投影 GEMM+激活；ffn_layer_general_activation 是激活 helper。
+- prepare_for_group_gemm 是指针/offset 准备，weight_permute 是布局；moe_reduce 是本地专家结果加权汇总。
+- TecoBLAS NN/NT fp16 gemm_*allReduce 已由单设备、无通信组、无 graph 的 torch.mm/F.linear 实测确认属于小 M/N GEMM 局部归约算法，归 GEMM。单次矩阵乘可只发射这个核，不能把它简单称为前一个 GEMM 的后处理。仅放行已验证变体，其他变体显式 unknown。
+- 精确 WAIT/SET 排除，哪怕 exporter 标为 gpu_memset；tcclStreamWaitFlagKernel 保留通信同步。
+- gemma 不是 GEMM；KV cache helper 不是 attention 主计算。
+- CK/CUTLASS 明确 GEMM 类型的 ReLU/GELU/LayerNorm 是 epilogue；hipblasLtMatrixTransform 是布局辅助。
+- 库名不证明 GEMM；不把任意 cutlass:: 或 BLAS namespace 当矩阵乘。
+
+Teco 依据见 [知识参考](tecovllm-t100-kernel-knowledge.md) 和 [此次审阅](teco-kernel-review-20261012.md)。
+新增实验与逐核证据等级见 [T100 深度复核](t100-allreduce-deep-review-20261012.md)。
+
+## 验证
+
+先检查 trace、API 和实现，再加入稳定模式，不硬编码一次模板实例，不为消除 fallback 使用泛厂商前缀。
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_*.py' -v
+python3 scripts/test_kernel_categories.py
+python3 scripts/audit_kernel_categories.py trace.json.gz \
+  --platform teco --kernel-rules rules/kernel-classification-rules.json --output audit.json
+```
+
+audit 也支持 XLSX/TSV/CSV。按耗时检查 low、歧义和 unknown；fail-on-fallback 只查未命中，不证明语义。修改后同时跑旧平台和新例外用例，核对设备耗时总和。

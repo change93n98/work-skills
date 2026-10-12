@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""Cross-platform kernel classification for LLM profiling traces.
+"""Load editable name-based classification rules for profiling kernels.
 
-The six report buckets are intentionally stable for existing consumers:
-``gemm``, ``通信 (comm)``, ``FlashAttention (fa)``, ``Triton``,
-``其他elementwise`` and ``memcpy/memset``.
-
-Important design rule: a kernel name is evidence, not a complete semantic
-contract.  Rules therefore use explicit vendor/library/operator markers,
-ordered from the most specific semantics to the broad fallback.  The public
-``classify_kernel`` API remains compatible, while ``classify_kernel_with_reason``
-exposes the matched rule for audits and regression tests.
+Rules live in ``../rules/kernel-classification-rules.json`` rather than code.
+``auto`` preserves cross-platform behavior; a selected platform uses its own
+rules plus ``common``. A name match is evidence, not runtime source attribution.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
+from pathlib import Path
 import re
-from typing import Optional
+from typing import Any, Optional
 
 
 CATEGORIES = (
@@ -27,124 +24,250 @@ CATEGORIES = (
     "其他elementwise",
     "memcpy/memset",
 )
+PLATFORMS = ("auto", "nv", "dcu", "teco")
+DEFAULT_RULES_PATH = Path(__file__).resolve().parent.parent / "rules" / "kernel-classification-rules.json"
 
-# Kept as a public compatibility mapping.  Unlike the old implementation,
-# matching is performed by the ordered regex rules below, not by iterating this
-# broad list with ``pattern in name``.
-OP_CATEGORIES = {
-    "gemm": [
-        "gemm", "hgemm", "matmul", "nvjet_", "cublas", "rocblas", "hipblaslt",
-        "CKGemm", "DeviceGemm", "GroupedGemm", "SplitkGemm", "StreamkGemm",
-        "Cijk", "slave_gemm", "slave_mm_", "GemmWrapArgs", "linear_kernel",
-    ],
-    "通信 (comm)": [
-        "tccl", "nccl", "rccl", "allreduce", "all_reduce", "allgather",
-        "all_gather", "reduce_scatter", "two_shot", "one_shot",
-        "cross_device_reduce", "mnnvl", "CustomAllReduce",
-    ],
-    "FlashAttention (fa)": [
-        "flash::", "flash_attn", "FlashAttention", "FlashDecoding", "fmha",
-        "mha_fwd", "mha_bwd", "paged_attention", "page_attention",
-        "fused_block_attention", "block_attention", "teco_slave_flash_attention",
-    ],
-    "Triton": ["triton"],
-    "其他elementwise": [
-        "fused_qk_gemma_norm_mrope", "fused_norm", "layernorm", "rmsnorm",
-        "ffn_layer_general", "causal_conv1d", "delta_rule", "gdn_gating",
-        "softmax", "gelu", "silu", "rope", "mrope", "sampling",
-    ],
-    "memcpy/memset": [
-        "memcpy", "memset", "copy_stride_dma", "set_tensor", "dma_2d", "dma_3d",
-    ],
-}
+
+class RuleConfigurationError(ValueError):
+    """An invalid rule artifact; callers must fix it rather than ignore it."""
 
 
 @dataclass(frozen=True)
 class _Rule:
+    rule_id: str
+    platform: str
     category: Optional[str]
     reason: str
-    patterns: tuple[re.Pattern[str], ...]
+    priority: int
+    patterns: tuple[tuple[str, re.Pattern[str]], ...]
+    semantic_type: str
+    evidence: tuple[str, ...]
+    confidence: str
+    ambiguity_reasons: tuple[str, ...]
+    category_candidates: tuple[str, ...]
+    notes: Optional[str]
 
 
-def _rule(category: Optional[str], reason: str, *patterns: str) -> _Rule:
-    return _Rule(category, reason, tuple(re.compile(p, re.IGNORECASE) for p in patterns))
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise RuleConfigurationError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
 
 
-# Ordered semantic rules.  Do not move broad vendor fallbacks above explicit
-# operator rules: CUTLASS contains both GEMM and FlashAttention/DeltaRule.
-_RULES = (
-    # Runtime/profiler markers are excluded from GPU busy time.  WAIT is an
-    # exact trace marker; do not exclude arbitrary names merely containing
-    # ``wait``.
-    _rule(None, "runtime:WAIT/SET", r"^\s*(?:WAIT|SET)\s*$"),
-    _rule(None, "runtime:profiler", r"(?:^|[_.:])profiler(?:$|[_.:])", r"ProfilerStep", r"torch\.autograd", r"autograd"),
+def _nonempty_string(value: Any, context: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise RuleConfigurationError(f"{context} must be a non-empty string")
+    return value
 
-    # Communication must be explicit.  Generic ``broadcast`` is deliberately
-    # absent because T100 tecodnn broadcast_add/no_broadcast_* are local
-    # elementwise kernels, not inter-device collectives.
-    _rule("通信 (comm)", "collective:TCCL/NCCL/RCCL", r"\b(?:tccl|nccl|rccl)(?:[A-Za-z0-9_]|::)*"),
-    _rule("通信 (comm)", "collective:all-reduce/gather/scatter", r"(?:all[_]?reduce|all[_]?gather|reduce[_]?scatter|custom[_]?allreduce)"),
-    _rule("通信 (comm)", "collective:multi-device/fused", r"(?:cross[_]?device[_]?reduce|two[_]?shot|one[_]?shot|mnnvl|trtllm_mnnvl)"),
 
-    # Explicit transfer/DMA names precede generic copy/elementwise names.
-    _rule("memcpy/memset", "memory:CUDA/HIP transfer", r"(?:memcpy|memset|hipmem|hipmemcpy|asyncmemcpy|memcpyasync)"),
-    _rule("memcpy/memset", "memory:T100 DMA/copy", r"(?:sdaart::sdaamemcpy|copy[_]?stride[_]?dma|teco_slave_(?:copy_stride|set_tensor|memset)|(?:^|[_.:])dma[_]?(?:2d|3d)(?:$|[_.:])|batch_memcpy|memcpy32|memcpy_p2p)"),
-    _rule("memcpy/memset", "memory:directional transfer", r"(?:^|\s)(?:d2h|h2d|h2h|d2d)(?:$|\s|[()])"),
+def _string_list(value: Any, context: str, *, allow_empty: bool = False) -> list[str]:
+    if not isinstance(value, list) or (not value and not allow_empty):
+        qualifier = "a list" if allow_empty else "a non-empty list"
+        raise RuleConfigurationError(f"{context} must be {qualifier} of strings")
+    return [_nonempty_string(item, f"{context}[{index}]") for index, item in enumerate(value)]
 
-    # Attention-specific kernels precede CUTLASS/vendor fallbacks.
-    _rule("FlashAttention (fa)", "attention:T100 flash/block attention", r"(?:teco_slave_flash_attention|fused_block_attention|block_attention)"),
-    _rule("FlashAttention (fa)", "attention:CUDA/ROCm flash/fmha", r"(?:flash::|flash[_]?attn|flashattention|flash[_]?decoding|fmha|mha[_]?(?:fwd|bwd)|paged?[_]?attention|page[_]?attention)"),
 
-    # Triton is an implementation backend and is unambiguous when it is an
-    # actual kernel prefix/namespace.  Keep it before elementwise fallback.
-    _rule("Triton", "backend:Triton", r"(?:^|[_.:])triton(?:$|[_.:])"),
+def _validate_detail(value: Any, context: str, *, allow_excluded: bool) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuleConfigurationError(f"{context} must be an object")
+    detail = {}
+    for key in ("id", "reason", "semantic_type"):
+        detail[key] = _nonempty_string(value.get(key), f"{context}.{key}")
+    if "category" not in value:
+        raise RuleConfigurationError(f"{context}.category is required")
+    category = value["category"]
+    if category not in CATEGORIES and not (allow_excluded and category is None):
+        raise RuleConfigurationError(f"{context}.category {category!r} is not a supported report category")
+    detail["category"] = category
+    detail["evidence"] = _string_list(value.get("evidence"), f"{context}.evidence", allow_empty=True)
+    confidence = value.get("confidence")
+    if confidence not in ("high", "medium", "low", "unknown"):
+        raise RuleConfigurationError(f"{context}.confidence must be high, medium, low, or unknown")
+    detail["confidence"] = confidence
+    detail["ambiguity_reasons"] = _string_list(value.get("ambiguity_reasons", []), f"{context}.ambiguity_reasons", allow_empty=True)
+    candidates = _string_list(value.get("category_candidates", [category] if category is not None else []),
+                              f"{context}.category_candidates", allow_empty=True)
+    if any(candidate not in CATEGORIES for candidate in candidates):
+        raise RuleConfigurationError(f"{context}.category_candidates contains an unsupported category")
+    detail["category_candidates"] = candidates
+    detail["notes"] = _nonempty_string(value["notes"], f"{context}.notes") if "notes" in value else None
+    return detail
 
-    # T100/local knowledge and CUDA fused operators that are not GEMM.
-    # ``gemma`` is intentionally handled here before the GEMM rule: the local
-    # tecovllm op fused_qk_gemma_norm_mrope is norm/rope, not matrix multiply.
-    _rule("其他elementwise", "fused:T100 qk-gemma norm/mrope", r"fused[_]?qk[_]?gemma[_]?norm[_]?mrope", r"fused[_]?qk.*norm.*(?:rope|mrope)"),
-    _rule("其他elementwise", "fused:T100 norm/activation/FFN", r"(?:fused[_]?norm|layernorm|rmsnorm|ffn[_]?layer[_]?general|fused[_]?ffn|activation|gelu|silu|relu)"),
-    _rule("其他elementwise", "fused:T100 DeltaRule/GDN/conv", r"(?:delta[_]?rule|deltarule|gated[_]?delta|fused[_]?recurrent|gdn[_]?gating|compute[_]v[_]?new|compute[_]o(?:_|$)|compute[_]decay|fused[_]?sigmoid[_]?gating|causal[_]?conv1d)"),
-    _rule("其他elementwise", "fused:T100 layout/cache/index", r"(?:tecolmk_slave_(?:prefill_cache|block_kv_gather|src_kind.*permute)|reshape_and_cache|compute_slot_mapping|index[_]?tensor|cast[_]?tensor|reduce[_]?tensor|concat|permute|transpose|rotary|mrope|rope|embedding|top[_]?k|sampling|sample[_]?recovered|rejection_random|eagle_prepare_inputs|scatter_num_accepted)"),
-    _rule("其他elementwise", "elementwise:CUDA/ROCm/T100", r"(?:elementwise|vectorized|unrolled_elementwise|softmax|scatter_gather|index_elementwise|index_put|catarray|direct_copy_kernel|binaryfunctor|fillfunctor|clamp_tensor|arg_max|(?:^|[_:.])reduce_kernel(?:$|[_:.])|(?:^|[_:.])unary(?:$|[_:.])|(?:^|[_:.])binary(?:$|[_:.])|(?:^|[_:.])ternary(?:$|[_:.])|tecodnn::ual::slave::teco_slave_(?:broadcast|no_broadcast|masked_fill|activation|gelu|softmax|embedding)|fused_post_conv|postprocess_mamba|teco_fused_add_bitwise|tecorand::|philox|xorwow|arange|linspace|gather_elements|scatter_out|expand_(?:impl|kernel)|bilinear_pos_embed|zero_kv_blocks|eagle_(?:set_inputs|prepare)|update_num_computed_tokens|fill_reverse_indices|radix_sort|device_scan|device_sort|scan_kernel|sort_kernel|teco_slave_cast|indexSelectSmallIndex|at::native::.*reduce_kernel|cub::detail::scan|DeviceScan|scan::)"),
 
-    # GEMM rules use word/operator boundaries so ``gemma`` cannot match.
-    _rule("gemm", "gemm:T100 GEMM/BLAS", r"(?:teco_slave_gemm|slave_gemm|slave_mm_|GemmWrapArgs|Gemm[MNK]|(?:^|[_.:])gemm(?:$|[_.:]))"),
-    _rule("gemm", "gemm:CUDA/ROCm library", r"(?:nvjet_[a-z0-9_]+|cublas(?:lt)?|hipblaslt|rocblas|ckgemm|devicegemm|groupedgemm|splitkgemm|streamkgemm|cijk(?:_|$)|splitkreduce_kernel|linear_kernel)"),
-    _rule("gemm", "gemm:CUTLASS non-attention", r"cutlass::"),
-)
+class KernelClassifier:
+    """Compile a rule artifact once, with an explicit platform scope.
+
+    Lower ``priority`` values win globally across enabled groups. Equal
+    priorities use artifact group order and then rule order. Editing a rule
+    file takes effect in the next instance or ``configure_classifier`` call.
+    """
+
+    def __init__(self, rules_path: Optional[str | Path] = None, platform: str = "auto"):
+        if platform not in PLATFORMS:
+            raise RuleConfigurationError(f"unsupported platform {platform!r}; choose from {', '.join(PLATFORMS)}")
+        self.platform = platform
+        self.path = Path(rules_path if rules_path is not None else DEFAULT_RULES_PATH).expanduser().resolve()
+        try:
+            raw = self.path.read_bytes()
+        except OSError as exc:
+            raise RuleConfigurationError(f"cannot read kernel rules {self.path}: {exc}") from exc
+        try:
+            artifact = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_unique_object)
+            self._load_artifact(artifact)
+        except (UnicodeError, json.JSONDecodeError, RuleConfigurationError) as exc:
+            raise RuleConfigurationError(f"invalid kernel rules {self.path}: {exc}") from exc
+        self.sha256 = hashlib.sha256(raw).hexdigest()
+
+    def _load_artifact(self, artifact: Any) -> None:
+        if not isinstance(artifact, dict):
+            raise RuleConfigurationError("root must be an object")
+        if type(artifact.get("schema_version")) is not int or artifact["schema_version"] != 1:
+            raise RuleConfigurationError("schema_version must be 1")
+        self.version = _nonempty_string(artifact.get("version"), "version")
+        if artifact.get("categories") != list(CATEGORIES):
+            raise RuleConfigurationError("categories must equal the six supported report categories in their existing order")
+        keywords = artifact.get("compatibility_keywords")
+        if not isinstance(keywords, dict) or set(keywords) != set(CATEGORIES):
+            raise RuleConfigurationError("compatibility_keywords must contain exactly the six report categories")
+        self.compatibility_keywords = {
+            category: _string_list(keywords[category], f"compatibility_keywords.{category}", allow_empty=True)
+            for category in CATEGORIES
+        }
+        self.exclude_hints = _string_list(artifact.get("exclude_hints"), "exclude_hints", allow_empty=True)
+        self.fallback = _validate_detail(artifact.get("fallback"), "fallback", allow_excluded=False)
+        platforms = artifact.get("platforms")
+        expected_groups = {"common", "nv", "dcu", "teco"}
+        if not isinstance(platforms, dict) or set(platforms) != expected_groups:
+            raise RuleConfigurationError("platforms must contain exactly common, nv, dcu, and teco groups")
+        compiled = []
+        seen_ids = {self.fallback["id"]}
+        # Validate all groups even when a specific platform is selected. A typo
+        # must fail consistently instead of remaining hidden until a later run.
+        for group, rules in platforms.items():
+            if not isinstance(rules, list):
+                raise RuleConfigurationError(f"platforms.{group} must be a list of rules")
+            for index, value in enumerate(rules):
+                context = f"platforms.{group}[{index}]"
+                detail = _validate_detail(value, context, allow_excluded=True)
+                if detail["id"] in seen_ids:
+                    raise RuleConfigurationError(f"duplicate rule id {detail['id']!r} in {context}")
+                seen_ids.add(detail["id"])
+                priority = value.get("priority")
+                if type(priority) is not int:
+                    raise RuleConfigurationError(f"{context}.priority must be an integer")
+                patterns = []
+                for pattern in _string_list(value.get("patterns"), f"{context}.patterns"):
+                    try:
+                        patterns.append((pattern, re.compile(pattern, re.IGNORECASE)))
+                    except re.error as exc:
+                        raise RuleConfigurationError(f"{context} ({detail['id']}) has invalid regex {pattern!r}: {exc}") from exc
+                rule = _Rule(
+                    rule_id=detail["id"], platform=group,
+                    category=detail["category"], reason=detail["reason"],
+                    priority=priority, patterns=tuple(patterns),
+                    semantic_type=detail["semantic_type"], evidence=tuple(detail["evidence"]),
+                    confidence=detail["confidence"], ambiguity_reasons=tuple(detail["ambiguity_reasons"]),
+                    category_candidates=tuple(detail["category_candidates"]),
+                    notes=detail["notes"],
+                )
+                if self.platform == "auto" or group in ("common", self.platform):
+                    compiled.append(rule)
+        self.rules = tuple(sorted(compiled, key=lambda rule: rule.priority))
+
+    def classify_detail(self, name: str) -> dict[str, Any]:
+        """Return category, rule, matched regex and curated evidence.
+
+        ``confidence`` describes rule evidence, not a probability and not proof
+        that a particular runtime invocation has the declared semantics.
+        ``None`` categories denote excluded profiler/runtime markers.
+        """
+        text = str(name)
+        for rule in self.rules:
+            for pattern, compiled in rule.patterns:
+                if compiled.search(text):
+                    detail = {
+                        "category": rule.category, "reason": rule.reason,
+                        "rule_id": rule.rule_id, "rule_platform": rule.platform,
+                        "semantic_type": rule.semantic_type, "evidence": list(rule.evidence),
+                        "confidence": rule.confidence, "matched_pattern": pattern,
+                        "ambiguity_reasons": list(rule.ambiguity_reasons),
+                        "category_candidates": list(rule.category_candidates),
+                    }
+                    if rule.notes is not None:
+                        detail["notes"] = rule.notes
+                    return detail
+        detail = {
+            "category": self.fallback["category"], "reason": self.fallback["reason"],
+            "rule_id": self.fallback["id"], "rule_platform": "common",
+            "semantic_type": self.fallback["semantic_type"], "evidence": list(self.fallback["evidence"]),
+            "confidence": self.fallback["confidence"], "matched_pattern": None,
+            "ambiguity_reasons": list(self.fallback["ambiguity_reasons"]),
+            "category_candidates": list(self.fallback["category_candidates"]),
+        }
+        if self.fallback["notes"] is not None:
+            detail["notes"] = self.fallback["notes"]
+        return detail
+
+    def classify_kernel_with_reason(self, name: str) -> tuple[Optional[str], str]:
+        detail = self.classify_detail(name)
+        return detail["category"], detail["reason"]
+
+    def get_rule_provenance(self) -> dict[str, str]:
+        return {"path": str(self.path), "sha256": self.sha256, "version": self.version, "platform": self.platform}
+
+
+_DEFAULT_CLASSIFIER = KernelClassifier()
+# Keep the mapping and list objects stable for existing ``from ... import``
+# callers. They are presentation hints; regex rules perform classification.
+OP_CATEGORIES = {category: list(words) for category, words in _DEFAULT_CLASSIFIER.compatibility_keywords.items()}
+EXCLUDE_PATTERNS = list(_DEFAULT_CLASSIFIER.exclude_hints)
+
+
+def configure_classifier(rules_path: Optional[str | Path] = None, platform: str = "auto") -> KernelClassifier:
+    """Replace the active classifier only after the complete artifact validates."""
+    global _DEFAULT_CLASSIFIER
+    classifier = KernelClassifier(rules_path, platform)
+    _DEFAULT_CLASSIFIER = classifier
+    OP_CATEGORIES.clear()
+    OP_CATEGORIES.update({category: list(words) for category, words in classifier.compatibility_keywords.items()})
+    EXCLUDE_PATTERNS[:] = classifier.exclude_hints
+    return classifier
+
+
+def get_rule_provenance() -> dict[str, str]:
+    """Identify the exact artifact used by the public classification wrappers."""
+    return _DEFAULT_CLASSIFIER.get_rule_provenance()
+
+
+def add_classification_args(parser: Any) -> None:
+    """Add shared CLI arguments; callers configure after parsing them."""
+    parser.add_argument("--kernel-rules", default=None, help="Editable kernel rule JSON (default: bundled rules/kernel-classification-rules.json)")
+    parser.add_argument("--platform", choices=PLATFORMS, default="auto", help="Enable this platform's rules plus common; auto enables all groups")
 
 
 def classify_kernel_with_reason(name: str) -> tuple[Optional[str], str]:
-    """Classify ``name`` and return ``(category, rule)``.
+    """Return the stable category and audit reason using the active artifact."""
+    return _DEFAULT_CLASSIFIER.classify_kernel_with_reason(name)
 
-    ``None`` means the event is a runtime/profiler marker and must be excluded
-    from kernel busy time.  Unknown valid GPU kernels intentionally fall back
-    to ``其他elementwise`` for backward-compatible reports, but carry the
-    ``fallback:unknown`` reason so audits can surface them.
-    """
-    text = str(name)
-    for rule in _RULES:
-        if any(pattern.search(text) for pattern in rule.patterns):
-            return rule.category, rule.reason
-    return "其他elementwise", "fallback:unknown"
+
+def classify_kernel_detail(name: str) -> dict[str, Any]:
+    """Return matched rule evidence using the active classifier."""
+    return _DEFAULT_CLASSIFIER.classify_detail(name)
 
 
 def classify_kernel(name: str) -> Optional[str]:
-    """Return the stable report category, or ``None`` for excluded markers."""
+    """Return the stable report category, or None for excluded markers."""
     return classify_kernel_with_reason(name)[0]
 
 
 def classification_reason(name: str) -> str:
-    """Return the rule/audit reason used for ``name``."""
+    """Return the rule/audit reason used for name."""
     return classify_kernel_with_reason(name)[1]
 
 
 def should_exclude_kernel(name: str) -> bool:
-    """Whether ``name`` is a non-compute trace marker."""
+    """Whether name is a non-compute trace marker."""
     return classify_kernel(name) is None
-
-
-# Compatibility list for callers that only need a human-readable exclusion
-# hint.  Matching itself uses the explicit regex rules above.
-EXCLUDE_PATTERNS = ["WAIT", "profiler", "ProfilerStep", "torch.autograd", "autograd"]

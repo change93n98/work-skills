@@ -2,7 +2,7 @@
 name: llm-prof
 description: >
   大模型推理profiling分析。启动vLLM/SGLang服务，执行bench profiling，分析trace输出prefill和decode算子耗时汇总表。
-  也支持直接分析已有的trace文件（快速模式）。
+  也支持直接分析已有的trace文件（快速模式），以及 graph-off 源码映射、graph-on 设备耗时的双 trace 分析。
   触发词：prof分析、profiling、算子耗时、推理性能、trace分析、分析trace。
 ---
 
@@ -48,7 +48,7 @@ description: >
 - **NVIDIA GPU**：CUDA、NCCL、cuBLAS/cuBLASLt、CUTLASS、FlashAttention、Triton
 - **太初 T100**：识别 `tecoblas`、`tecolmk`、`tecodnn`、`tecocustom`、`tccl`、`sdaart` 等 trace kernel 命名
 
-算子分类由两个分析器共用的 `scripts/kernel_categories.py` 提供。分类不是简单的 kernel 名字 substring：规则按运行时标记、通信、内存、attention、Triton、融合算子、GEMM 的语义优先级匹配，并返回匹配原因。平台规则见 `references/kernel-classification.md`；T100 的本地语义证据见 `references/tecovllm-t100-kernel-knowledge.md`。
+分类规则的独立产物是 `rules/kernel-classification-rules.json`，含 `common`、`nv`、`dcu`、`teco` 分组；`scripts/kernel_categories.py` 负责读取和校验。所有分析/audit 入口支持 `--kernel-rules <JSON>` 和 `--platform auto|nv|dcu|teco`，报告记录规则版本与 SHA256。自动分类仍依据名字，并输出规则 ID、语义细分、证据强度与歧义；编写规则时的源码证据不等于当前调用的源码归因。外部代码读取与参数说明见 [分类产物](references/kernel-classification.md)。T100 语义证据见 `references/tecovllm-t100-kernel-knowledge.md`，此次实机审閱见 `references/teco-kernel-review-20261012.md`。
 
 如果用户提供了本地 T100 代码仓库，优先读取算子注册/API 和实现来确认语义，再扩展稳定的命名空间或算子模式；不要根据一个完整的模板实例名直接硬编码。
 
@@ -290,6 +290,17 @@ python -m sglang.bench_serving \
 
 ## Step 5: 分析Trace
 
+如果 decode 使用 CUDA/HIP/SDAA graph，且需要 CPU 算子或 Python 来源，读取 [graph 双 trace 流程](references/graph-source-mapping.md)，使用 `scripts/prof_graph_analyze.py`。先采集 graph-off 建立来源映射，再采集真实 graph-on replay 统计设备耗时；单份 graph-on trace 的 `with_stack` 不能恢复未执行的逐算子 host 调用链。需要确认两次运行的配置、实际 graph 开关、阶段窗口及 rank/设备一致。
+
+```bash
+python3 scripts/prof_graph_analyze.py \
+  --mapping-trace <graph-off-decode.json.gz> \
+  --formal-trace <graph-on-decode.json.gz> \
+  --stage decode --output-dir <output_dir>
+```
+
+这个入口只从 graph-on 的明确设备事件取 dur，不把 cpu_op 当设备耗时；不依赖 model_forward 阶段标记。输出 JSON/CSV/文本及可选 XLSX，标记 `match_basis`、每个候选的 `attribution_basis`、`source_status`、`ambiguity_reasons`。多来源不强选唯一位置，无法关联则保留未知。跨 trace 只按完整/有限规范化符号匹配，不使用两次运行的关联 ID；类别仍按名字分类。详细采集、国产卡后端开关验证、窗口选择和配置审计见上述参考。
+
 Profiling生成 `.pt.trace.json.gz` 或 `.json.gz`，在运行目录中找到并分析：
 
 ```bash
@@ -322,6 +333,7 @@ $RUN_DIR/
 - 算子分六类：gemm、通信、FlashAttention、Triton、其他elementwise、memcpy/memset
 - 分类兼容 DCU、NVIDIA 和太初 T100；T100 的 `WAIT` 运行时等待标记不计入 kernel busy time，而计入 bubble/idle
 - 分类规则同时输出 `classification_rule`；`fallback:unknown` 必须通过 audit 脚本检查，不允许静默认为分类正确
+- 明细保留 `semantic_type`、`classification_confidence`、`classification_ambiguity` 和候选类别；“其他elementwise”是兼容桶，不等于全部逐元素。FFN 融合 GEMM 与激活 helper 分开。已由单设备纯矩阵乘实测确认的 TecoBLAS NN/NT fp16 allReduce 归 GEMM；未验证变体仍报告 unknown，不能按 allReduce 字样认定通信。
 
 ### XLSX输出（4个子表）
 
@@ -423,4 +435,6 @@ python3 scripts/prof_analyze.py \
 - `prof算子耗时占比分析.pdf` — 分析原理
 - `perfetto-sql-py工具.pdf` — Perfetto SQL工具
 - `kernel-classification.md` — DCU/NVIDIA/太初 T100 kernel 命名与分类扩展规则
+- `teco-kernel-review-20261012.md` — 知识库、34 节点 trace 与预期 API 的审閱范围、重要修正和未决项
 - `tecovllm-t100-kernel-knowledge.md` — 基于本地 tecovllm API/实现的 T100 语义证据
+- `graph-source-mapping.md` — CUDA/HIP/T100-SDAA graph 的双 trace 采集、来源匹配与歧义审计

@@ -13,12 +13,16 @@ import argparse
 import gzip
 import json
 import os
+import shutil
 import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
 
-from kernel_categories import OP_CATEGORIES, classify_kernel, should_exclude_kernel
+from kernel_categories import (
+    OP_CATEGORIES, add_classification_args, classify_kernel,
+    configure_classifier, get_rule_provenance, should_exclude_kernel,
+)
 
 
 def decompress_trace(trace_path: str) -> str:
@@ -26,9 +30,8 @@ def decompress_trace(trace_path: str) -> str:
     path = Path(trace_path)
     if path.suffix == ".gz":
         tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
-        with gzip.open(path, "rt", encoding="utf-8") as f:
-            tmp.write(f.read())
-        tmp.close()
+        with tmp, gzip.open(path, "rb") as f:
+            shutil.copyfileobj(f, tmp)
         return tmp.name
     return str(path)
 
@@ -38,7 +41,7 @@ def run_perfetto_query(tp, sql: str) -> list:
     result = tp.query(sql)
     rows = []
     for row in result:
-        rows.append(dict(row))
+        rows.append({column: getattr(row, column) for column in result.column_names})
     return rows
 
 
@@ -139,61 +142,21 @@ def find_phases_perfetto(tp, decode_step: int = 2) -> dict:
 
 
 def get_kernels_perfetto(tp, start_ts: int, end_ts: int) -> list:
-    """Query GPU kernels in time range using Perfetto SQL."""
+    """Read only exported device durations; host operator names are not GPU time."""
+    from graph_source_mapping import DEVICE_CATEGORIES
+    categories = ", ".join("'" + category + "'" for category in sorted(DEVICE_CATEGORIES))
     query = f"""
-    SELECT s.name, s.ts, s.dur, s.cat, t.name as track_name
+    SELECT s.name, s.ts, s.dur, s.category as cat, t.name as track_name
     FROM slice s
     JOIN track t ON s.track_id = t.id
     WHERE s.ts >= {start_ts}
       AND s.ts + s.dur <= {end_ts}
       AND s.dur > 0
-      AND (
-        t.name LIKE '%GPU%'
-        OR t.name LIKE '%gpu%'
-        OR t.name LIKE '%CUDA%'
-        OR t.name LIKE '%HIP%'
-        OR t.name LIKE '%stream%'
-        OR s.cat LIKE '%kernel%'
-        OR s.cat LIKE '%gpu%'
-        OR s.name LIKE '%gemm%'
-        OR s.name LIKE '%Gemm%'
-        OR s.name LIKE '%flash%'
-        OR s.name LIKE '%Flash%'
-        OR s.name LIKE '%reduce%'
-        OR s.name LIKE '%Reduce%'
-        OR s.name LIKE '%nccl%'
-        OR s.name LIKE '%rccl%'
-        OR s.name LIKE '%memcpy%'
-        OR s.name LIKE '%memset%'
-        OR s.name LIKE '%triton%'
-        OR s.name LIKE '%Triton%'
-        OR s.name LIKE '%teco%'
-        OR s.name LIKE '%Teco%'
-        OR s.name LIKE '%tccl%'
-        OR s.name LIKE '%TCCL%'
-        OR s.name LIKE '%sdaa%'
-        OR s.name LIKE '%SDAA%'
-        OR s.name LIKE '%nvjet%'
-        OR s.name LIKE '%cutlass%'
-        OR s.name LIKE '%cublas%'
-        OR s.name LIKE '%ck_%'
-        OR s.name LIKE '%CK_%'
-        OR s.name LIKE '%softmax%'
-        OR s.name LIKE '%layernorm%'
-        OR s.name LIKE '%rmsnorm%'
-        OR s.name LIKE '%silu%'
-        OR s.name LIKE '%gelu%'
-        OR s.name LIKE '%relu%'
-        OR s.name LIKE '%rope%'
-        OR s.name LIKE '%topk%'
-        OR s.name LIKE '%embedding%'
-        OR s.name LIKE '%elementwise%'
-        OR s.name LIKE '%fmha%'
-        OR s.name LIKE '%fmoe%'
-      )
+      AND s.category IN ({categories})
     ORDER BY s.ts
     """
-    return run_perfetto_query(tp, query)
+    return [row for row in run_perfetto_query(tp, query)
+            if not should_exclude_kernel(row["name"])]
 
 
 def analyze_kernels(kernels: list) -> dict:
@@ -261,8 +224,13 @@ def main():
     parser.add_argument("--output-dir", default=None, help="Output directory")
     parser.add_argument("--decode-step", type=int, default=2, help="Decode step to analyze (default: 2)")
     parser.add_argument("--verbose", action="store_true")
+    add_classification_args(parser)
 
     args = parser.parse_args()
+    try:
+        configure_classifier(args.kernel_rules, args.platform)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
 
     if args.output_dir is None:
         args.output_dir = os.path.dirname(os.path.abspath(args.trace_file))
@@ -278,6 +246,9 @@ def main():
         sys.argv = [sys.argv[0], "--trace-file", args.trace_file,
                     "--output-dir", args.output_dir,
                     "--decode-step", str(args.decode_step)]
+        sys.argv.extend(["--platform", args.platform])
+        if args.kernel_rules:
+            sys.argv.extend(["--kernel-rules", args.kernel_rules])
         if args.verbose:
             sys.argv.append("--verbose")
         prof_analyze.main()
@@ -286,6 +257,7 @@ def main():
     print(f"Loading trace with Perfetto: {args.trace_file}")
     trace_path = decompress_trace(args.trace_file)
 
+    tp = None
     try:
         tp = TraceProcessor(trace=trace_path)
 
@@ -332,16 +304,27 @@ def main():
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write("大模型推理Profiling算子耗时分析报告\n")
             f.write(f"分析方法: Perfetto trace_processor SQL\n")
+            f.write("分类规则: " + json.dumps(get_rule_provenance(), ensure_ascii=False) + "\n")
             f.write(format_table("Prefill阶段", prefill_stats))
             f.write(format_table(f"Decode阶段 (Step {args.decode_step})", decode_stats))
 
         json_path = os.path.join(args.output_dir, "prof_analysis.json")
+        from prof_analyze import analyze_kernels_detailed
+        def detailed(kernels, window):
+            # Perfetto uses ns; the common report contract uses us.
+            microsecond_kernels = [dict(kernel, dur=kernel["dur"] / 1000) for kernel in kernels]
+            return analyze_kernels_detailed(microsecond_kernels, (window["end"] - window["start"]) / 1000)
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump({"prefill": prefill_stats, "decode": decode_stats}, f, indent=2, ensure_ascii=False)
+            json.dump({"prefill": prefill_stats, "decode": decode_stats,
+                       "prefill_detailed": detailed(prefill_kernels, prefill),
+                       "decode_detailed": detailed(decode_kernels, decode),
+                       "classification_rules": get_rule_provenance()}, f, indent=2, ensure_ascii=False)
 
         print(f"\nResults saved to: {args.output_dir}")
 
     finally:
+        if tp is not None:
+            tp.close()
         # Cleanup temp file
         if trace_path != args.trace_file:
             os.unlink(trace_path)

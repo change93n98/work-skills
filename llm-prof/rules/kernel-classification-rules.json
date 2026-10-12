@@ -1,0 +1,1515 @@
+{
+  "schema_version": 1,
+  "version": "2026-10-12.3",
+  "categories": [
+    "gemm",
+    "通信 (comm)",
+    "FlashAttention (fa)",
+    "Triton",
+    "其他elementwise",
+    "memcpy/memset"
+  ],
+  "fallback": {
+    "id": "fallback.unknown",
+    "category": "其他elementwise",
+    "reason": "fallback:unknown",
+    "semantic_type": "unknown",
+    "evidence": [],
+    "confidence": "unknown",
+    "notes": "Compatibility bucket only; this does not confirm elementwise semantics.",
+    "ambiguity_reasons": [
+      "No reviewed name rule matched; report bucket does not establish operator semantics"
+    ]
+  },
+  "compatibility_keywords": {
+    "gemm": [
+      "gemm",
+      "hgemm",
+      "matmul",
+      "nvjet_",
+      "cublas",
+      "rocblas",
+      "hipblaslt",
+      "CKGemm",
+      "DeviceGemm",
+      "GroupedGemm",
+      "SplitkGemm",
+      "StreamkGemm",
+      "Cijk",
+      "slave_gemm",
+      "slave_mm_",
+      "GemmWrapArgs",
+      "linear_kernel"
+    ],
+    "通信 (comm)": [
+      "tccl",
+      "nccl",
+      "rccl",
+      "allreduce",
+      "all_reduce",
+      "allgather",
+      "all_gather",
+      "reduce_scatter",
+      "two_shot",
+      "one_shot",
+      "cross_device_reduce",
+      "mnnvl",
+      "CustomAllReduce"
+    ],
+    "FlashAttention (fa)": [
+      "flash::",
+      "flash_attn",
+      "FlashAttention",
+      "FlashDecoding",
+      "fmha",
+      "mha_fwd",
+      "mha_bwd",
+      "paged_attention",
+      "page_attention",
+      "fused_block_attention",
+      "block_attention",
+      "teco_slave_flash_attention"
+    ],
+    "Triton": [
+      "triton"
+    ],
+    "其他elementwise": [
+      "fused_qk_gemma_norm_mrope",
+      "fused_norm",
+      "layernorm",
+      "rmsnorm",
+      "ffn_layer_general",
+      "causal_conv1d",
+      "delta_rule",
+      "gdn_gating",
+      "softmax",
+      "gelu",
+      "silu",
+      "rope",
+      "mrope",
+      "sampling"
+    ],
+    "memcpy/memset": [
+      "memcpy",
+      "memset",
+      "copy_stride_dma",
+      "set_tensor",
+      "dma_2d",
+      "dma_3d"
+    ]
+  },
+  "exclude_hints": [
+    "WAIT",
+    "profiler",
+    "ProfilerStep",
+    "torch.autograd",
+    "autograd"
+  ],
+  "platforms": {
+    "common": [
+      {
+        "id": "common.runtime.wait-set",
+        "category": null,
+        "reason": "runtime:WAIT/SET",
+        "priority": 0,
+        "patterns": [
+          "^\\s*(?:WAIT|SET)\\s*$"
+        ],
+        "semantic_type": "runtime_marker",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "high"
+      },
+      {
+        "id": "common.runtime.profiler",
+        "category": null,
+        "reason": "runtime:profiler",
+        "priority": 100,
+        "patterns": [
+          "(?:^|[_.:])profiler(?:$|[_.:])",
+          "ProfilerStep",
+          "torch\\.autograd",
+          "autograd"
+        ],
+        "semantic_type": "runtime_marker",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "high"
+      },
+      {
+        "id": "common.collective.operation",
+        "category": "通信 (comm)",
+        "reason": "collective:all-reduce/gather/scatter",
+        "priority": 300,
+        "patterns": [
+          "(?:all[_]?reduce|all[_]?gather|reduce[_]?scatter|custom[_]?allreduce)"
+        ],
+        "semantic_type": "collective",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.collective.multi-device",
+        "category": "通信 (comm)",
+        "reason": "collective:multi-device/fused",
+        "priority": 400,
+        "patterns": [
+          "(?:cross[_]?device[_]?reduce|two[_]?shot|one[_]?shot)"
+        ],
+        "semantic_type": "collective",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.memory.transfer",
+        "category": "memcpy/memset",
+        "reason": "memory:CUDA/HIP transfer",
+        "priority": 500,
+        "patterns": [
+          "(?:memcpy|memset|asyncmemcpy|memcpyasync)"
+        ],
+        "semantic_type": "memory_transfer",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.memory.direction",
+        "category": "memcpy/memset",
+        "reason": "memory:directional transfer",
+        "priority": 700,
+        "patterns": [
+          "(?:^|\\s)(?:d2h|h2d|h2h|d2d)(?:$|\\s|[()])"
+        ],
+        "semantic_type": "memory_transfer",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.attention.flash-fmha",
+        "category": "FlashAttention (fa)",
+        "reason": "attention:CUDA/ROCm flash/fmha",
+        "priority": 900,
+        "patterns": [
+          "(?:flash::|flash[_]?attn|flashattention|flash[_]?decoding|fmha|mha[_]?(?:fwd|bwd)|paged?[_]?attention|page[_]?attention)"
+        ],
+        "semantic_type": "attention",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.backend.triton",
+        "category": "Triton",
+        "reason": "backend:Triton",
+        "priority": 1000,
+        "patterns": [
+          "(?:^|[_.:])triton(?:$|[_.:])"
+        ],
+        "semantic_type": "backend",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.fused.norm-activation-ffn",
+        "category": "其他elementwise",
+        "reason": "fused:T100 norm/activation/FFN",
+        "priority": 1200,
+        "patterns": [
+          "(?:fused[_]?norm|layernorm|rmsnorm|activation|gelu|silu|relu)"
+        ],
+        "semantic_type": "norm_or_activation",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.fused.delta-gdn-conv",
+        "category": "其他elementwise",
+        "reason": "fused:T100 DeltaRule/GDN/conv",
+        "priority": 1300,
+        "patterns": [
+          "(?:delta[_]?rule|deltarule|gated[_]?delta|fused[_]?recurrent|gdn[_]?gating|fused[_]?sigmoid[_]?gating|causal[_]?conv1d)"
+        ],
+        "semantic_type": "linear_attention_conv",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium",
+        "notes": "Generic compute_o/compute_v_new helpers require vendor/source context; no blanket semantic inference."
+      },
+      {
+        "id": "common.fused.layout-cache-index",
+        "category": "其他elementwise",
+        "reason": "fused:T100 layout/cache/index",
+        "priority": 1400,
+        "patterns": [
+          "(?:reshape_and_cache|compute_slot_mapping|index[_]?tensor|cast[_]?tensor|reduce[_]?tensor|concat|permute|transpose|rotary|mrope|rope|embedding|top[_]?k|sampling|sample[_]?recovered|rejection_random|eagle_prepare_inputs|scatter_num_accepted)"
+        ],
+        "semantic_type": "layout_cache_index",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.elementwise.framework",
+        "category": "其他elementwise",
+        "reason": "elementwise:CUDA/ROCm/T100",
+        "priority": 1500,
+        "patterns": [
+          "(?:elementwise|vectorized|unrolled_elementwise|softmax|scatter_gather|index_elementwise|index_put|catarray|direct_copy_kernel|binaryfunctor|fillfunctor|clamp_tensor|arg_max|(?:^|[_:.])reduce_kernel(?:$|[_:.])|(?:^|[_:.])unary(?:$|[_:.])|(?:^|[_:.])binary(?:$|[_:.])|(?:^|[_:.])ternary(?:$|[_:.])|fused_post_conv|postprocess_mamba|philox|xorwow|arange|linspace|gather_elements|scatter_out|expand_(?:impl|kernel)|bilinear_pos_embed|zero_kv_blocks|eagle_(?:set_inputs|prepare)|update_num_computed_tokens|fill_reverse_indices|radix_sort|device_scan|device_sort|scan_kernel|sort_kernel|indexSelectSmallIndex|at::native::.*reduce_kernel|cub::detail::scan|DeviceScan|scan::)"
+        ],
+        "semantic_type": "elementwise",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "low"
+      },
+      {
+        "id": "common.gemm.operation",
+        "category": "gemm",
+        "reason": "gemm:T100 GEMM/BLAS",
+        "priority": 1600,
+        "patterns": [
+          "(?:^|[_.:])gemm(?:$|[_.:])"
+        ],
+        "semantic_type": "gemm",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.gemm.linear",
+        "category": "gemm",
+        "reason": "gemm:CUDA/ROCm library",
+        "priority": 1700,
+        "patterns": [
+          "linear_kernel"
+        ],
+        "semantic_type": "gemm",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "common.gemm.explicit-name",
+        "category": "gemm",
+        "reason": "common:gemm:explicit-name",
+        "priority": 1090,
+        "patterns": [
+          "(?:^|::|\\bvoid\\s+)(?:[shdb]?gemm|matmul)(?:[_<\\s(]|$)"
+        ],
+        "semantic_type": "gemm",
+        "evidence": [
+          "Explicit bounded matrix-multiply operator name; excludes gemma and metadata preparation prefixes"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "common.gemv.explicit-name",
+        "category": "gemm",
+        "reason": "common:gemv:explicit-name",
+        "priority": 1090,
+        "patterns": [
+          "(?:^|::|\\bvoid\\s+)gemv(?:[_<\\s(]|$)"
+        ],
+        "semantic_type": "gemv",
+        "evidence": [
+          "Explicit bounded matrix-vector operator name; compatible GEMM bucket"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      }
+    ],
+    "nv": [
+      {
+        "id": "nv.collective.library",
+        "category": "通信 (comm)",
+        "reason": "collective:TCCL/NCCL/RCCL",
+        "priority": 200,
+        "patterns": [
+          "\\bnccl(?:[A-Za-z0-9_]|::)*"
+        ],
+        "semantic_type": "collective",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "nv.collective.mnnvl",
+        "category": "通信 (comm)",
+        "reason": "collective:multi-device/fused",
+        "priority": 400,
+        "patterns": [
+          "(?:mnnvl|trtllm_mnnvl)"
+        ],
+        "semantic_type": "collective",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "nv.gemm.library",
+        "category": "gemm",
+        "reason": "gemm:CUDA/ROCm library",
+        "priority": 1700,
+        "patterns": [
+          "(?:nvjet_[a-z0-9_]+|cublas(?:lt)?[^<>]*(?:gemm|matmul)|splitkreduce_kernel)"
+        ],
+        "semantic_type": "gemm",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium",
+        "notes": "Library namespace alone does not prove GEMM; vector/layout helpers use separate rules."
+      },
+      {
+        "id": "nv.gemm.cutlass",
+        "category": "gemm",
+        "reason": "gemm:CUTLASS non-attention",
+        "priority": 1800,
+        "patterns": [
+          "cutlass::(?:gemm::)?(?:kernel::|device::)?Gemm"
+        ],
+        "semantic_type": "gemm",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "low",
+        "notes": "Only explicit GEMM families; unrelated CUTLASS symbols remain unknown or match source-specific attention/state rules.",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "nv.attention.prepare",
+        "category": "FlashAttention (fa)",
+        "reason": "nv:attention:prepare",
+        "priority": 850,
+        "patterns": [
+          "flash::prepare_varlen_num_blocks_kernel"
+        ],
+        "semantic_type": "attention_prepare",
+        "evidence": [
+          "sglang:sgl-kernel/include/sgl_flash_kernel_ops.h:89 — precomputed FA3 tile scheduling metadata"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "nv.attention.combine",
+        "category": "FlashAttention (fa)",
+        "reason": "nv:attention:combine",
+        "priority": 860,
+        "patterns": [
+          "flash::.*FlashAttnFwdCombine"
+        ],
+        "semantic_type": "attention_combine",
+        "evidence": [
+          "Reviewed H100 phase exports: FlashAttnFwdCombine symbol; auxiliary attention reduction"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "nv.gemm.splitk-reduce",
+        "category": "gemm",
+        "reason": "nv:gemm:splitk-reduce",
+        "priority": 1040,
+        "patterns": [
+          "cublasLt::splitKreduce_kernel"
+        ],
+        "semantic_type": "gemm_splitk_reduce",
+        "evidence": [
+          "Reviewed H100 phase exports: cublasLt::splitKreduce_kernel symbol; split-K accumulation helper"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "nv.gemm.explicit-cutlass",
+        "category": "gemm",
+        "reason": "nv:gemm:explicit-cutlass",
+        "priority": 1070,
+        "patterns": [
+          "cutlass::gemm::(?:kernel|device)::Gemm"
+        ],
+        "semantic_type": "gemm_with_epilogue",
+        "evidence": [
+          "sglang:sgl-kernel/csrc/cutlass_extensions/gemm/cutlass_gemm_caller.cuh:47,50 — GemmUniversalMode::kGemm / GemmUniversalAdapter"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "nv.blas.vector-helper",
+        "category": "其他elementwise",
+        "reason": "nv:blas:vector-helper",
+        "priority": 1060,
+        "patterns": [
+          "cublas(?:lt)?[_:]*(?:[shdbcz]?(?:axpy|scal|copy|swap|dot|nrm2|asum))(?:[_<:(\\s]|$)"
+        ],
+        "semantic_type": "blas_vector_or_copy",
+        "evidence": [
+          "BLAS vector helpers do not establish a matrix-multiplication kernel"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "nv.gemv.explicit",
+        "category": "gemm",
+        "reason": "nv:gemv:explicit",
+        "priority": 1080,
+        "patterns": [
+          "cublas(?:lt)?[^<>]*gemv"
+        ],
+        "semantic_type": "gemv",
+        "evidence": [
+          "Explicit cuBLAS GEMV operator symbol; GEMV uses the compatible GEMM report bucket"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      }
+    ],
+    "dcu": [
+      {
+        "id": "dcu.collective.library",
+        "category": "通信 (comm)",
+        "reason": "collective:TCCL/NCCL/RCCL",
+        "priority": 200,
+        "patterns": [
+          "\\brccl(?:[A-Za-z0-9_]|::)*"
+        ],
+        "semantic_type": "collective",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "dcu.memory.hip",
+        "category": "memcpy/memset",
+        "reason": "memory:CUDA/HIP transfer",
+        "priority": 500,
+        "patterns": [
+          "(?:hipmem|hipmemcpy)"
+        ],
+        "semantic_type": "memory_transfer",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "dcu.gemm.library",
+        "category": "gemm",
+        "reason": "gemm:CUDA/ROCm library",
+        "priority": 1700,
+        "patterns": [
+          "(?:hipblaslt[^<>]*(?:gemm|matmul)|rocblas[^<>]*(?:gemm|matmul)|ckgemm|devicegemm|groupedgemm|splitkgemm|streamkgemm|cijk(?:_|$))"
+        ],
+        "semantic_type": "gemm",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium",
+        "notes": "BLAS namespace alone is insufficient; transform/vector helpers are separate."
+      },
+      {
+        "id": "dcu.gemm.explicit-ck",
+        "category": "gemm",
+        "reason": "dcu:gemm:explicit-ck",
+        "priority": 1070,
+        "patterns": [
+          "(?:DeviceGemm|GroupedGemm|CKGemm|kernel_gemm_)"
+        ],
+        "semantic_type": "gemm_with_epilogue",
+        "evidence": [
+          "composable_kernel:include/ck/tensor_operation/gpu/device/impl/device_gemm_xdl_layernorm_cshuffle.hpp:79,552,593 — GEMM with LayerNorm",
+          "composable_kernel:example/03_gemm_bias_relu/gemm_bias_relu_xdl_fp16.cpp:34,60,65 — GEMM AddRelu epilogue"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "dcu.blas.matrix-transform",
+        "category": "其他elementwise",
+        "reason": "dcu:blas:matrix-transform",
+        "priority": 1060,
+        "patterns": [
+          "hipblasLtMatrixTransform|hipblaslt[^<>]*matrix[_]?transform"
+        ],
+        "semantic_type": "matrix_layout_transform",
+        "evidence": [
+          "DTK-26.10:hipBLASLt库使用手册:1094-1100 — C=alpha*op(A)+beta*op(B), layout helper"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "dcu.blas.vector-helper",
+        "category": "其他elementwise",
+        "reason": "dcu:blas:vector-helper",
+        "priority": 1060,
+        "patterns": [
+          "rocblas[_:]*(?:[shdbcz]?(?:axpy|scal|copy|swap|dot|nrm2|asum))(?:[_<:(\\s]|$)"
+        ],
+        "semantic_type": "blas_vector_or_copy",
+        "evidence": [
+          "DTK-26.10:rocBLAS库使用手册:162-165 — library includes BLAS levels 1, 2 and 3"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "dcu.gemv.explicit",
+        "category": "gemm",
+        "reason": "dcu:gemv:explicit",
+        "priority": 1080,
+        "patterns": [
+          "rocblas[^<>]*gemv"
+        ],
+        "semantic_type": "gemv",
+        "evidence": [
+          "DTK-26.10:rocBLAS库使用手册:1292-1301,2705 — matrix-vector GEMV"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      }
+    ],
+    "teco": [
+      {
+        "id": "teco.review.blas_gemm_allreduce",
+        "category": "gemm",
+        "reason": "gemm:T100 single-device small-MN reduction algorithm",
+        "priority": 125,
+        "patterns": [
+          "tecoblas::ual::slave::teco_slave_gemm_(?:NN|NT)_Afp16_Bfp16_Cfp16_allReduce(?=\\(|\\s|$)"
+        ],
+        "semantic_type": "gemm_small_mn_local_reduce",
+        "evidence": [
+          "review:t100-deep-review-20261012/pure_mm_small_n_330/results.json — torch.mm, one visible logical device24 on physical card6, no process group, no graph; exact NN symbol is the only compute kernel, CPU reference passes",
+          "review:t100-deep-review-20261012/pure_linear_small_n_330/results.json — F.linear produces exact NT variant with identical single-device conditions and CPU correctness",
+          "review:t100-deep-review-20261012/historical-eager-allreduce.json — historical launch is temporally enclosed by tecoblasHgemm -> mm.out -> aten::linear",
+          "TecoBLAS3.3.0 SHA25633d74409c22f31e28f18020e809c329a5d8bbeb776369f44d51785dfe0df2072: GemmNN/NT::findAlgoImplKai calls the allReduce GEMM algorithm branch",
+          "review:t100-deep-review-20261012/tccl_control_330 — actual two-physical-card collectives use TCCL kernels; tested matrix allReduce symbol absent"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Verified NN/NT fp16 variants perform small-M/N GEMM with local reduction, not an inter-card collective. A single invocation emits this as its only compute kernel: do not call it merely post-processing of the preceding GEMM. Exact internal work partition remains proprietary; revalidate other library versions/variants.",
+        "category_candidates": [
+          "gemm"
+        ]
+      },
+      {
+        "id": "teco.review.ffn_activation_helper",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:ffn_activation_helper",
+        "priority": 150,
+        "patterns": [
+          "tecolmk_slave_ffn_layer_general_activation"
+        ],
+        "semantic_type": "activation",
+        "evidence": [
+          "tecovllm:csrc/lmk/ffn.cc:62 — FFN selects activation mode independently of the two projection weights."
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [],
+        "notes": "Standalone activation helper must precede general FFN rule; exact proprietary helper implementation unavailable."
+      },
+      {
+        "id": "teco.review.ffn_fused_small",
+        "category": "gemm",
+        "reason": "teco:source-review:ffn_fused_small",
+        "priority": 150,
+        "patterns": [
+          "tecolmk_slave_ffn_layer_general_fused_for_small"
+        ],
+        "semantic_type": "fused_ffn",
+        "evidence": [
+          "tecovllm:csrc/lmk/ffn.cc:125 — tecolmkTransformerFfnLayerGeneralV2 receives inter and outer weights plus activation mode.",
+          "tecorigin-kb:teco_vllm/注册模型/注册模型.md:749 — MLP fusion explicitly combines multiple linear ops and activation into one SDAA kernel.",
+          "https://docs.tecorigin.com/release/teco_vllm/v3.3.0/#d90a1b81afcc5a1fabc83f506a01a5ca"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "GEMM + activation + GEMM fused kernel; cannot allocate its duration among components without finer instrumentation."
+      },
+      {
+        "id": "teco.review.blas_gemm",
+        "category": "gemm",
+        "reason": "teco:source-review:blas_gemm",
+        "priority": 150,
+        "patterns": [
+          "(?:teco_slave_gemm|slave_gemm_|slave_mm_dequantize)"
+        ],
+        "semantic_type": "gemm",
+        "evidence": [
+          "tecovllm:csrc/lmk/matmul.cc:106 — TecoBLAS batched GEMM call.",
+          "tecovllm:csrc/lmk/group_gemm_v2.cc:111 — TecoLMK grouped batched GEMM entry.",
+          "tecovllm:csrc/lmk/weight_only_linear.cc:67 — Quantized weight-only linear entry.",
+          "tecorigin-kb:teco_megatron_lm/性能调优/Profiler使用介绍/性能数据可视化.md:42 — Example names teco_slave_gemm and GemmWrapArgs under TecoBLAS kernel.",
+          "https://docs.tecorigin.com/release/teco_megatron_lm/v3.3.0/#d70c0d7a1e0b5a40a51a35c4b6379d18"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Quantized slave_mm_dequantize is inferred to be the matrix-multiply path from mm + M/N/K-style signature; exact library body is unavailable."
+      },
+      {
+        "id": "teco.review.communication_wait",
+        "category": "通信 (comm)",
+        "reason": "teco:source-review:communication_wait",
+        "priority": 150,
+        "patterns": [
+          "tcclStreamWaitFlagKernel"
+        ],
+        "semantic_type": "communication_sync",
+        "evidence": [
+          "tecovllm:vllm_sdaa/distributed/device_communicators/pytccl.py:148 — TCCL collective calls run on device streams."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "This is a device communication synchronization kernel; retain its duration, do not confuse with exact WAIT marker."
+      },
+      {
+        "id": "teco.review.communication_transfer",
+        "category": "通信 (comm)",
+        "reason": "teco:source-review:communication_transfer",
+        "priority": 150,
+        "patterns": [
+          "tccl_move_data"
+        ],
+        "semantic_type": "communication_transfer",
+        "evidence": [
+          "tecovllm:vllm_sdaa/distributed/device_communicators/pytccl.py:148 — TCCL backend implements cross-device collectives."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.communication_collective",
+        "category": "通信 (comm)",
+        "reason": "teco:source-review:communication_collective",
+        "priority": 150,
+        "patterns": [
+          "(?:tccl_all_reduce|allreduce_and_move)"
+        ],
+        "semantic_type": "communication_collective",
+        "evidence": [
+          "tecovllm:vllm_sdaa/distributed/device_communicators/pytccl.py:148 — tcclAllReduce invocation.",
+          "tecovllm:vllm_sdaa/distributed/device_communicators/pytccl.py:202 — tcclAllGather invocation."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.memory_transfer",
+        "category": "memcpy/memset",
+        "reason": "teco:source-review:memory_transfer",
+        "priority": 150,
+        "patterns": [
+          "(?:sdaart::sdaaMemcpy|copy_stride_dma|teco_slave_memset|teco_slave_set_tensor)"
+        ],
+        "semantic_type": "memory_transfer_or_fill",
+        "evidence": [
+          "tecorigin-kb:sdaart/API参考/内存管理/sdaaMemcpyAsync.md:15 — SDAA runtime asynchronous data transfer.",
+          "https://docs.tecorigin.com/release/sdaart/v3.2.0/#b3aec63c08e311eeafde0242ac11000c",
+          "tecorigin-kb:sdaart/API参考/内存管理/sdaaMemsetAsync.md:15 — Initializes device Global memory to a specified value.",
+          "https://docs.tecorigin.com/release/sdaart/v3.2.0/#b3aa5ab608e311eeafde0242ac11000c",
+          "tecorigin-kb:sdaart/数据类型/枚举类型/sdaaMemcpyKind.md:9 — Host/device transfer direction enum.",
+          "https://docs.tecorigin.com/release/sdaart/v3.2.0/#b3851a5808e311eeafde0242ac11000c"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Runtime transfer labels and explicit vendor DMA/memset/SetTensorArgs names establish transfer/fill. No compute time split needed."
+      },
+      {
+        "id": "teco.review.flash_attention",
+        "category": "FlashAttention (fa)",
+        "reason": "teco:source-review:flash_attention",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_flash_attention"
+        ],
+        "semantic_type": "attention",
+        "evidence": [
+          "tecovllm:csrc/lmk/flash_attention.cc:50 — tecolmkFlashAttention invocation.",
+          "tecorigin-kb:pytorch2.12/API参考/自定义算子API/torch.ops.sdaa.fused_fast_attention_v3.md:17 — SDAA fused FlashAttention V3 semantics.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#dd23bc1b4ef950ed8646ef3f6343cb3c"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.block_attention",
+        "category": "FlashAttention (fa)",
+        "reason": "teco:source-review:block_attention",
+        "priority": 150,
+        "patterns": [
+          "tecolmk_slave_fused_block_attention"
+        ],
+        "semantic_type": "attention",
+        "evidence": [
+          "tecovllm:csrc/lmk/block_attention.cc:101 — tecolmkTransformerBlockAttentionLayerV2 invocation."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.kv_cache",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:kv_cache",
+        "priority": 150,
+        "patterns": [
+          "(?:tecolmk_slave_prefill_cache|tecolmk_slave_block_kv_gather)"
+        ],
+        "semantic_type": "kv_cache_layout",
+        "evidence": [
+          "tecovllm:csrc/lmk/block_attention.cc:129 — Attention API takes mutable key/value cache pointers; helper names and BlockAttentionLayerArgs indicate cache path.",
+          "tecovllm:csrc/cache_ops.cc:79 — Standalone tecolmkReshapeAndCache path.",
+          "tecovllm:csrc/scpp/cache_kernels.scpp:76 — Cache kernel stores key/value tensors into cache slots."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "These helper kernels move/convert cached K/V and do not perform attention by themselves."
+      },
+      {
+        "id": "teco.review.prefill_rope_concat",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:prefill_rope_concat",
+        "priority": 150,
+        "patterns": [
+          "tecolmk_slave_prefill_rope_qkv_concat"
+        ],
+        "semantic_type": "rope_layout",
+        "evidence": [
+          "tecovllm:csrc/lmk/block_attention.cc:101 — BlockAttention wrapper passes q/k/v/rotary/cache state; helper name establishes RoPE + QKV layout."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.delta_rule_recurrent",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:delta_rule_recurrent",
+        "priority": 150,
+        "patterns": [
+          "tecolmk_slave_fused_recurrent_gated_delta_rule"
+        ],
+        "semantic_type": "linear_attention_state_update",
+        "evidence": [
+          "tecovllm:csrc/lmk/fused_recurrent_gated_delta_rule_fwd.cc:111 — Recurrent gated DeltaRule API operates on q/k/v/g/beta and initial/final state."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "The legacy other-elementwise report bucket is a compatibility bucket: this operator is not mathematically elementwise."
+      },
+      {
+        "id": "teco.review.delta_rule_chunk_state",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:delta_rule_chunk_state",
+        "priority": 150,
+        "patterns": [
+          "tecolmk_slave_compute_(?:v_new_last_state|o)\\(ChunkGatedDeltaRuleArgs"
+        ],
+        "semantic_type": "linear_attention_state_update",
+        "evidence": [
+          "tecovllm:csrc/lmk/chunk_gated_delta_rule_fwd.cc:124 — Chunk GatedDeltaRule API.",
+          "tecovllm:vllm_sdaa/layers/fla/ops/chunk.py:38 — Linear attention function routes Q/K/V, beta, initial state into the chunk op."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Require tecolmk namespace and ChunkGatedDeltaRuleArgs. Bare compute_o/compute_v_new are not safe global rules."
+      },
+      {
+        "id": "teco.review.delta_rule_chunk_prepare",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:delta_rule_chunk_prepare",
+        "priority": 150,
+        "patterns": [
+          "tecolmk_slave_compute_decay_mask_u_w\\(ChunkGatedDeltaRuleArgs"
+        ],
+        "semantic_type": "linear_attention_prepare",
+        "evidence": [
+          "tecovllm:csrc/lmk/chunk_gated_delta_rule_fwd.cc:124 — Chunk DeltaRule API; this named helper computes decay/mask/U/W."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.gdn_gating",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:gdn_gating",
+        "priority": 150,
+        "patterns": [
+          "tecolmk_slave_fused_gdn_gating"
+        ],
+        "semantic_type": "gating_elementwise",
+        "evidence": [
+          "tecovllm:csrc/lmk/fused_gdn_gating.cc:84 — Gating API uses tensors a/b/log_a_weight/bias and returns g/b_out."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.causal_conv1d",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:causal_conv1d",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_causal_conv1d"
+        ],
+        "semantic_type": "convolution_state_update",
+        "evidence": [
+          "tecovllm:csrc/lmk/causal_conv1d_fn.cc:141 — Causal convolution forward invocation.",
+          "tecovllm:csrc/lmk/causal_conv1d_update.cc:154 — Causal convolution state update invocation."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Convolution is not mathematically elementwise; legacy bucket is retained for compatibility."
+      },
+      {
+        "id": "teco.review.norm",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:norm",
+        "priority": 150,
+        "patterns": [
+          "(?:tecolmk_slave_fused_norm|teco_slave_layernorm)"
+        ],
+        "semantic_type": "normalization_or_softmax",
+        "evidence": [
+          "tecovllm:csrc/lmk/fused_norm.cc:79 — Normalization mode switch includes softmax/sigmoid/RMS/layer/L1/L2."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [
+          "Fused norm mode is not fully identified by this kernel symbol"
+        ],
+        "notes": "Do not infer numeric FusedNorm mode meaning without the versioned enum header; all observed modes are normalization."
+      },
+      {
+        "id": "teco.review.qk_gemma_norm_mrope",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:qk_gemma_norm_mrope",
+        "priority": 150,
+        "patterns": [
+          "fused_qk_gemma_norm_mrope_kernel_impl"
+        ],
+        "semantic_type": "normalization_rope",
+        "evidence": [
+          "tecovllm:csrc/scpp/fused_qk_gemma_norm_mrope_kernel.scpp:42 — Custom q/k normalization + mRoPE kernel definition."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "gemma is a model/norm identifier, not gemm."
+      },
+      {
+        "id": "teco.review.weight_permute",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:weight_permute",
+        "priority": 150,
+        "patterns": [
+          "tecolmk_slave_src_kind8_9_dst_kind7_permute"
+        ],
+        "semantic_type": "weight_layout_transform",
+        "evidence": [
+          "tecovllm:csrc/lmk/weight_permute.cc:70 — tecolmkWeightPermuteV2 entry maps weight layouts."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Layout conversion helper in quantized linear path; do not count as matrix multiply."
+      },
+      {
+        "id": "teco.review.slot_mapping",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:slot_mapping",
+        "priority": 150,
+        "patterns": [
+          "compute_slot_mapping_kernel_impl"
+        ],
+        "semantic_type": "index_metadata",
+        "evidence": [
+          "tecovllm:csrc/scpp/compute_slot_mapping_kernel.scpp:25 — Slot-mapping kernel implementation."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.spec_decode_metadata",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:spec_decode_metadata",
+        "priority": 150,
+        "patterns": [
+          "eagle_prepare_(?:inputs|next_token)_padded_impl"
+        ],
+        "semantic_type": "spec_decode_metadata",
+        "evidence": [
+          "tecovllm:csrc/scpp/spec_decode.scpp:4 — Eagle input preparation.",
+          "tecovllm:csrc/scpp/spec_decode.scpp:31 — Eagle next-token preparation."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.sampling",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:sampling",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_fused_top_k_top_p_sampling"
+        ],
+        "semantic_type": "sampling",
+        "evidence": [
+          "tecovllm:csrc/lmk/sampling.cc:237 — tecolmkFusedTopKTopPSampling entry."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.rejection_sampling",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:rejection_sampling",
+        "priority": 150,
+        "patterns": [
+          "(?:rejection_(?:random|greedy)_sample_impl|sample_recovered_tokens_impl)"
+        ],
+        "semantic_type": "rejection_sampling",
+        "evidence": [
+          "tecovllm:csrc/scpp/rejection_sampling.scpp:24 — Greedy rejection sampling implementation.",
+          "tecovllm:csrc/scpp/rejection_sampling.scpp:80 — Random rejection sampling implementation.",
+          "tecovllm:csrc/scpp/rejection_sampling.scpp:183 — Recovered token sampling implementation."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.cache_zero",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:cache_zero",
+        "priority": 150,
+        "patterns": [
+          "zero_kv_blocks_impl"
+        ],
+        "semantic_type": "memory_fill_kv_cache",
+        "evidence": [
+          "tecovllm:csrc/scpp/zero_kv_blocks.scpp:22 — Copies zeros into selected cache memory blocks."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Retain legacy other bucket for selected-block kernel; semantic subtype exposes fill. It is not a runtime Memset event."
+      },
+      {
+        "id": "teco.review.dnn_softmax",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:dnn_softmax",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_softmax"
+        ],
+        "semantic_type": "softmax",
+        "evidence": [
+          "tecorigin-kb:pytorch2.12/API参考/原生PyTorch算子类API支持说明/torch.md:515 — PyTorch SDAA supports torch.softmax.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#48ec4439f94451b693b7d3bf4466c9b3"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [],
+        "notes": "Library/operator name evidence; exact TecoDNN proprietary implementation is not included."
+      },
+      {
+        "id": "teco.review.dnn_reduce",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:dnn_reduce",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_(?:arg_max|reduce_tensor)"
+        ],
+        "semantic_type": "local_reduction",
+        "evidence": [
+          "tecorigin-kb:pytorch2.12/API参考/原生PyTorch算子类API支持说明/torch.md:127 — SDAA argmax support.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#48ec4439f94451b693b7d3bf4466c9b3"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [],
+        "notes": "Local tensor reduction under TecoDNN namespace; does not imply multi-device communication."
+      },
+      {
+        "id": "teco.review.dnn_activation",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:dnn_activation",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_(?:activation|gelu)"
+        ],
+        "semantic_type": "activation",
+        "evidence": [
+          "tecorigin-kb:tecopaddle/性能调优/性能分析Profiler/统计表单差异.md:433 — Profiler example identifies Teco GELU kernel and ActivationBwdArgs.",
+          "https://docs.tecorigin.com/release/tecopaddle/v3.3.0/#a07efb2e463011ee99bf0242ac110007"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.dnn_index",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:dnn_index",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_(?:index_tensor|index_select|index_put|gather_elements|scatter_out|embedding)"
+        ],
+        "semantic_type": "index_gather_scatter_embedding",
+        "evidence": [
+          "tecorigin-kb:pytorch2.12/API参考/原生PyTorch算子类API支持说明/torch.md:225 — SDAA embedding support.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#48ec4439f94451b693b7d3bf4466c9b3"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [],
+        "notes": "Stable TecoDNN operator names/argument structures; proprietary implementation unavailable."
+      },
+      {
+        "id": "teco.review.dnn_layout",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:dnn_layout",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_(?:concat|transpose|cast)"
+        ],
+        "semantic_type": "layout_or_dtype_transform",
+        "evidence": [
+          "tecorigin-kb:tecopaddle/性能调优/性能分析Profiler/统计表单差异.md:432 — Teco transpose profiler example.",
+          "https://docs.tecorigin.com/release/tecopaddle/v3.3.0/#a07efb2e463011ee99bf0242ac110007"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.dnn_sequence",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:dnn_sequence",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_(?:arange|linspace)"
+        ],
+        "semantic_type": "sequence_generation",
+        "evidence": [],
+        "confidence": "medium",
+        "ambiguity_reasons": [],
+        "notes": "Stable TecoDNN names and ArangeArgs/LinspaceArgs establish generation; exact library body unavailable."
+      },
+      {
+        "id": "teco.review.dnn_elementwise",
+        "category": "其他elementwise",
+        "reason": "elementwise:CUDA/ROCm/T100",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_(?:broadcast|no_broadcast|unary_ops|masked_fill|clamp_tensor)"
+        ],
+        "semantic_type": "elementwise",
+        "evidence": [
+          "tecorigin-kb:tecopaddle/性能调优/性能分析Profiler/统计表单差异.md:350 — NoBroadcastArgs/BroadcastArgs correspond to local tensor kernels.",
+          "https://docs.tecorigin.com/release/tecopaddle/v3.3.0/#a07efb2e463011ee99bf0242ac110007",
+          "tecorigin-kb:pytorch2.12/API参考/原生PyTorch算子类API支持说明/torch.md:381 — SDAA masked_fill support.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#48ec4439f94451b693b7d3bf4466c9b3"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [],
+        "notes": "broadcast/no_broadcast means local tensor broadcasting under TecoDNN, not collective broadcast."
+      },
+      {
+        "id": "teco.review.rng",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:rng",
+        "priority": 150,
+        "patterns": [
+          "tecorand::.*(?:philox|xorwow)"
+        ],
+        "semantic_type": "random_generation",
+        "evidence": [
+          "tecorigin-kb:pytorch2.12/API参考/原生PyTorch算子类API支持说明/torch.md:445 — SDAA random generation support.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#48ec4439f94451b693b7d3bf4466c9b3"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.generic_expand",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:generic_expand",
+        "priority": 150,
+        "patterns": [
+          "\\bexpand_impl"
+        ],
+        "semantic_type": "layout_expand",
+        "evidence": [
+          "tecovllm:csrc/scpp/rejection_sampling.scpp:140 — expand_impl broadcasts/expands tensors in rejection sampler."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.torch_elementwise",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:torch_elementwise",
+        "priority": 150,
+        "patterns": [
+          "(?:at::sdaa::native::elementwise_kernel|teco_fused_add_bitwise)"
+        ],
+        "semantic_type": "elementwise",
+        "evidence": [],
+        "confidence": "medium",
+        "ambiguity_reasons": [],
+        "notes": "Explicit elementwise implementation name or compiler-generated arithmetic/bitwise expression; generated source is absent."
+      },
+      {
+        "id": "teco.review.dnn_scan",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:dnn_scan",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_cumsum"
+        ],
+        "semantic_type": "local_scan",
+        "evidence": [
+          "tecorigin-kb:pytorch2.12/API参考/原生PyTorch算子类API支持说明/torch.md:208 — SDAA torch.cumsum support.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#48ec4439f94451b693b7d3bf4466c9b3"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [],
+        "notes": "Local prefix scan; not cross-device communication."
+      },
+      {
+        "id": "teco.review.dnn_repeat",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:dnn_repeat",
+        "priority": 150,
+        "patterns": [
+          "teco_slave_repeat_interleave"
+        ],
+        "semantic_type": "layout_repeat",
+        "evidence": [
+          "tecorigin-kb:pytorch2.12/API参考/原生PyTorch算子类API支持说明/torch.md:463 — SDAA torch.repeat_interleave support.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#48ec4439f94451b693b7d3bf4466c9b3"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.review.torch_index",
+        "category": "其他elementwise",
+        "reason": "teco:source-review:torch_index",
+        "priority": 150,
+        "patterns": [
+          "at::sdaa::native::index_(?:arange_check|copy_fast)_kernel"
+        ],
+        "semantic_type": "index_metadata_or_copy",
+        "evidence": [
+          "tecorigin-kb:pytorch2.12/API参考/原生PyTorch算子类API支持说明/torch.md:330 — SDAA torch.index_copy support.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#48ec4439f94451b693b7d3bf4466c9b3"
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [],
+        "notes": "Stable native indexing implementation names; exact torch_sdaa source unavailable."
+      },
+      {
+        "id": "teco.expected.1",
+        "category": "其他elementwise",
+        "reason": "teco:expected-source-family:gemm_metadata_prepare",
+        "priority": 140,
+        "patterns": [
+          "prepare_for_group_gemm_kernel_impl"
+        ],
+        "semantic_type": "gemm_metadata_prepare",
+        "evidence": [
+          "tecovllm:csrc/scpp/prepare_for_group_gemm.scpp:7 — Builds pointer arrays and cumulative token offsets; no matmul."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Source-backed operator family; not observed in the reviewed trace inventory."
+      },
+      {
+        "id": "teco.expected.2",
+        "category": "gemm",
+        "reason": "teco:expected-source-family:gemv",
+        "priority": 140,
+        "patterns": [
+          "custom_gemv_ace"
+        ],
+        "semantic_type": "gemv",
+        "evidence": [
+          "tecovllm:csrc/scpp/sdcops_gemv_ace_kernel.scpp:399 — Custom GEMV kernel.",
+          "tecovllm:csrc/lmk/gemv_ace.cc:16 — Uses M/K/N matrix dimensions."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Source-backed operator family; not observed in the reviewed trace inventory."
+      },
+      {
+        "id": "teco.expected.3",
+        "category": "gemm",
+        "reason": "teco:expected-source-family:fused_activation_linear",
+        "priority": 140,
+        "patterns": [
+          "fused_activation_linear"
+        ],
+        "semantic_type": "fused_activation_linear",
+        "evidence": [
+          "tecovllm:csrc/lmk/fused_activation_linear.cc:38 — M/N/K plus linear weight and activation passed to fused linear API."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Source-backed operator family; not observed in the reviewed trace inventory."
+      },
+      {
+        "id": "teco.expected.4",
+        "category": "其他elementwise",
+        "reason": "teco:expected-source-family:normalization",
+        "priority": 140,
+        "patterns": [
+          "(?:rms_norm|fused_add_rms_norm)"
+        ],
+        "semantic_type": "normalization",
+        "evidence": [
+          "tecovllm:csrc/scpp/rms_norm.scpp:23 — RMSNorm kernel.",
+          "tecovllm:csrc/scpp/rms_norm.scpp:93 — Residual add + RMSNorm kernel."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Source-backed operator family; not observed in the reviewed trace inventory."
+      },
+      {
+        "id": "teco.expected.5",
+        "category": "FlashAttention (fa)",
+        "reason": "teco:expected-source-family:attention",
+        "priority": 140,
+        "patterns": [
+          "fused_fast_attention_v3"
+        ],
+        "semantic_type": "attention",
+        "evidence": [
+          "tecorigin-kb:pytorch2.12/API参考/自定义算子API/torch.ops.sdaa.fused_fast_attention_v3.md:17 — Official API documents fused FlashAttention V3.",
+          "https://docs.tecorigin.com/release/pytorch2.12/v3.3.0/#dd23bc1b4ef950ed8646ef3f6343cb3c"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Source-backed operator family; not observed in the reviewed trace inventory."
+      },
+      {
+        "id": "teco.expected.6",
+        "category": "通信 (comm)",
+        "reason": "teco:expected-source-family:expert_parallel_communication",
+        "priority": 140,
+        "patterns": [
+          "tecoep.*(?:dispatch|combine)"
+        ],
+        "semantic_type": "expert_parallel_communication",
+        "evidence": [
+          "tecorigin-kb:teco_ep/概述.md:9 — TecoEP handles cross-device token distribution and result aggregation.",
+          "https://docs.tecorigin.com/release/teco_ep/v3.3.0/#8eb35c83dbe457a4976b0d3881abde45",
+          "tecovllm:vllm_sdaa/layers/fused_moe/prepare_finalize/tecoep_prepare_finalize.py:92 — Buffer dispatch.",
+          "tecovllm:vllm_sdaa/layers/fused_moe/prepare_finalize/tecoep_prepare_finalize.py:204 — Buffer combine."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Source-backed operator family; not observed in the reviewed trace inventory."
+      },
+      {
+        "id": "teco.collective.library",
+        "category": "通信 (comm)",
+        "reason": "collective:TCCL/NCCL/RCCL",
+        "priority": 200,
+        "patterns": [
+          "\\btccl(?:[A-Za-z0-9_]|::)*"
+        ],
+        "semantic_type": "collective",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "teco.memory.dma-copy",
+        "category": "memcpy/memset",
+        "reason": "memory:T100 DMA/copy",
+        "priority": 600,
+        "patterns": [
+          "(?:sdaart::sdaamemcpy|copy[_]?stride[_]?dma|teco_slave_(?:copy_stride|set_tensor|memset)|(?:^|[_.:])dma[_]?(?:2d|3d)(?:$|[_.:])|batch_memcpy|memcpy32|memcpy_p2p)"
+        ],
+        "semantic_type": "memory_transfer",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "teco.attention.flash-block",
+        "category": "FlashAttention (fa)",
+        "reason": "attention:T100 flash/block attention",
+        "priority": 800,
+        "patterns": [
+          "(?:teco_slave_flash_attention|fused_block_attention|block_attention)"
+        ],
+        "semantic_type": "attention",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "teco.fused.qk-gemma-norm-mrope",
+        "category": "其他elementwise",
+        "reason": "fused:T100 qk-gemma norm/mrope",
+        "priority": 1100,
+        "patterns": [
+          "fused[_]?qk[_]?gemma[_]?norm[_]?mrope",
+          "fused[_]?qk.*norm.*(?:rope|mrope)"
+        ],
+        "semantic_type": "norm_rope",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "teco.fused.layout-cache-index",
+        "category": "其他elementwise",
+        "reason": "fused:T100 layout/cache/index",
+        "priority": 1400,
+        "patterns": [
+          "tecolmk_slave_(?:prefill_cache|block_kv_gather|src_kind.*permute)"
+        ],
+        "semantic_type": "layout_cache_index",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "teco.elementwise.library",
+        "category": "其他elementwise",
+        "reason": "elementwise:CUDA/ROCm/T100",
+        "priority": 1500,
+        "patterns": [
+          "(?:tecodnn::ual::slave::teco_slave_(?:broadcast|no_broadcast|masked_fill|activation|gelu|softmax|embedding)|teco_fused_add_bitwise|tecorand::|teco_slave_cast)"
+        ],
+        "semantic_type": "elementwise",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "teco.gemm.blas",
+        "category": "gemm",
+        "reason": "gemm:T100 GEMM/BLAS",
+        "priority": 1600,
+        "patterns": [
+          "(?:teco_slave_gemm|slave_gemm|slave_mm_|GemmWrapArgs|Gemm[MNK])"
+        ],
+        "semantic_type": "gemm",
+        "evidence": [
+          "Migration of the existing name-based classifier; see references/kernel-classification.md."
+        ],
+        "confidence": "medium"
+      },
+      {
+        "id": "teco.expected.moe-local-reduce",
+        "category": "其他elementwise",
+        "reason": "teco:expected:moe-local-reduce",
+        "priority": 145,
+        "patterns": [
+          "(?:local_reduce_prefill|local_reduce_fused|(?:tecolmk_slave_|_C_sdaa::)moe_reduce)"
+        ],
+        "semantic_type": "moe_weighted_reduce",
+        "evidence": [
+          "tecovllm:csrc/scpp/moe_reduce.scpp:19-56,474-501,552,562 — local expert weighted accumulation"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Expected source-defined helper; not observed in the reviewed trace set. API-level context does not classify every sub-kernel."
+      },
+      {
+        "id": "teco.expected.moe-local-routing",
+        "category": "其他elementwise",
+        "reason": "teco:expected:moe-local-routing",
+        "priority": 145,
+        "patterns": [
+          "(?:tecolmk_slave_|_C_sdaa::)moe_routing"
+        ],
+        "semantic_type": "moe_local_routing",
+        "evidence": [
+          "tecovllm:csrc/lmk/moe_ops.cc:61-124; csrc/scpp/moe_router.scpp:491 — local expert map and token permutation"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "notes": "Expected source-defined helper; not observed in the reviewed trace set. API-level context does not classify every sub-kernel."
+      },
+      {
+        "id": "teco.unverified.blas-reduce-variant",
+        "category": "其他elementwise",
+        "reason": "fallback:unverified-blas-reduce-variant",
+        "priority": 126,
+        "patterns": [
+          "tecoblas::.*teco_slave_gemm.*allReduce"
+        ],
+        "semantic_type": "unverified_blas_reduce_variant",
+        "evidence": [
+          "Only NN/NT fp16 variants have direct isolated proof in this review"
+        ],
+        "confidence": "unknown",
+        "ambiguity_reasons": [
+          "Unverified symbol variant; do not infer cross-device communication from allReduce text"
+        ],
+        "category_candidates": [
+          "gemm",
+          "通信 (comm)"
+        ]
+      },
+      {
+        "id": "teco.tensor.half-float-transform",
+        "category": "其他elementwise",
+        "reason": "tensor:T100 verified half/float conversion",
+        "priority": 148,
+        "patterns": [
+          "teco_slave_no_broadcast_float_between_half"
+        ],
+        "semantic_type": "dtype_transform",
+        "evidence": [
+          "review:t100-deep-review-20261012/local-tensor-exact-matches.json — captured under a.float(), not multiplication"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.tensor.broadcast-expand",
+        "category": "其他elementwise",
+        "reason": "tensor:T100 broadcast layout expansion",
+        "priority": 148,
+        "patterns": [
+          "teco_slave_broadcast_expand(?:_2d|_last_dim)"
+        ],
+        "semantic_type": "layout_expand",
+        "evidence": [
+          "review:t100-deep-review-20261012/local-tensor-exact-matches.json — local expansion helper in broadcast mul/repeat_interleave"
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": []
+      }
+    ]
+  }
+}

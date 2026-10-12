@@ -16,7 +16,10 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from kernel_categories import OP_CATEGORIES, classification_reason, classify_kernel, should_exclude_kernel
+from kernel_categories import (
+    OP_CATEGORIES, add_classification_args, classification_reason, classify_kernel,
+    classify_kernel_detail, configure_classifier, get_rule_provenance, should_exclude_kernel,
+)
 
 try:
     from openpyxl import Workbook
@@ -334,10 +337,17 @@ def analyze_kernels_detailed(kernels: list, phase_duration_us: float) -> list:
 
     result = []
     for name, stats in kernel_stats.items():
+        classification = classify_kernel_detail(name)
         result.append({
             "kernel_name": name,
             "category": stats["category"],
             "classification_rule": stats.get("rule", ""),
+            "classification_rule_id": classification["rule_id"],
+            "semantic_type": classification["semantic_type"],
+            "classification_confidence": classification["confidence"],
+            "classification_evidence": classification["evidence"],
+            "classification_ambiguity": classification.get("ambiguity_reasons", []),
+            "classification_category_candidates": classification["category_candidates"],
             "call_count": stats["count"],
             "total_duration_us": stats["total_dur"],
             "avg_duration_us": stats["total_dur"] / stats["count"] if stats["count"] > 0 else 0,
@@ -387,7 +397,7 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
         ws.title = title
 
         headers = ["算子名称", "分类", "分类规则", "调用次数", "总耗时(us)", "平均耗时(us)",
-                    "相对占比(%)", "绝对占比(%)"]
+                    "相对占比(%)", "绝对占比(%)", "语义类型", "分类可信度", "分类歧义", "规则ID"]
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=h)
             cell.font = header_font
@@ -417,6 +427,13 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
             c8 = ws.cell(row=row, column=8, value=round(item["absolute_pct"], 2))
             c8.border = thin_border
             c8.number_format = '0.00'
+
+            for col, key in ((9, "semantic_type"), (10, "classification_confidence"),
+                             (11, "classification_ambiguity"), (12, "classification_rule_id")):
+                value = item.get(key, "")
+                if isinstance(value, list):
+                    value = "; ".join(value)
+                ws.cell(row=row, column=col, value=value).border = thin_border
 
         # Auto width
         for col in range(1, len(headers) + 1):
@@ -566,6 +583,7 @@ def save_results(output_dir: str, prefill_stats: dict, decode_stats: dict,
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write("大模型推理Profiling算子耗时分析报告\n")
         f.write(f"生成时间: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("分类规则: " + json.dumps(get_rule_provenance(), ensure_ascii=False) + "\n")
 
         if phases and "forward_slices" in phases:
             slices = phases["forward_slices"]
@@ -599,6 +617,9 @@ def save_results(output_dir: str, prefill_stats: dict, decode_stats: dict,
             "decode": decode_stats,
             "prefill_kernel_count": len(prefill_kernels),
             "decode_kernel_count": len(decode_kernels),
+            "classification_rules": get_rule_provenance(),
+            "prefill_detailed": analyze_kernels_detailed(prefill_kernels, prefill_duration_us),
+            "decode_detailed": analyze_kernels_detailed(decode_kernels, decode_duration_us),
         }, f, indent=2, ensure_ascii=False)
 
     return summary_path, json_path
@@ -611,8 +632,13 @@ def main():
     parser.add_argument("--decode-step", type=int, default=2,
                         help="Which decode step to analyze (default: 2)")
     parser.add_argument("--verbose", action="store_true")
+    add_classification_args(parser)
 
     args = parser.parse_args()
+    try:
+        configure_classifier(args.kernel_rules, args.platform)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
 
     if args.output_dir is None:
         args.output_dir = os.path.dirname(os.path.abspath(args.trace_file))

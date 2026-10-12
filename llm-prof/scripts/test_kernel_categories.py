@@ -15,7 +15,8 @@ CASES = {
     "void slave_mm_dequantize_v3<1536u>(void const*, void const*, void*, int, int, int)": "gemm",
     # T100 collective
     "void tccl_move_data_list<8192ul>(tcclMove)": "通信 (comm)",
-    "tecoblas::ual::slave::teco_slave_gemm_NT_Afp16_Bfp16_Cfp16_allReduce(GemmWrapArgs)": "通信 (comm)",
+    # Isolated single-device GEMM proves this is local matrix reduction.
+    "tecoblas::ual::slave::teco_slave_gemm_NT_Afp16_Bfp16_Cfp16_allReduce(GemmWrapArgs)": "gemm",
     # T100 attention
     "tecocustom::ual::kernel::teco_slave_flash_attention_forward_8_4_64_false_general_hd256(Args)": "FlashAttention (fa)",
     "void tecolmk_slave_fused_block_attention_decode_v2<256u, 32u>(BlockAttentionLayerArgs)": "FlashAttention (fa)",

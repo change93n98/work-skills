@@ -1,0 +1,156 @@
+{
+  "captured_date": "2026-10-12",
+  "torch_sdaa": "3.3.0",
+  "tecoblas": "3.3.0",
+  "library_sha256": "33d74409c22f31e28f18020e809c329a5d8bbeb776369f44d51785dfe0df2072",
+  "physical_device": 6,
+  "logical_visible_device": 24,
+  "visible_device_count": 1,
+  "distributed_initialized": false,
+  "graph_enabled": false,
+  "cases": [
+    {
+      "operation": "torch.mm",
+      "shape_mnk": [
+        1,
+        32,
+        5120
+      ],
+      "kernel_names": [
+        "tecoblas::ual::slave::teco_slave_gemm_NN_Afp16_Bfp16_Cfp16_allReduce(tecoblas::ual::ops::GemmWrapArgs)"
+      ],
+      "correctness": {
+        "max_abs_error": 6.0886144638061523e-05,
+        "passed": true
+      },
+      "trace_sha256": "9b738bf69df7c2168b5d2f09f7c3c5b02d5f05f09f80f449de12f99e91976f7d"
+    },
+    {
+      "operation": "torch.mm",
+      "shape_mnk": [
+        1,
+        64,
+        5120
+      ],
+      "kernel_names": [
+        "tecoblas::ual::slave::teco_slave_gemm_NN_Afp16_Bfp16_Cfp16_allReduce(tecoblas::ual::ops::GemmWrapArgs)"
+      ],
+      "correctness": {
+        "max_abs_error": 9.59634780883789e-05,
+        "passed": true
+      },
+      "trace_sha256": "cdb4f65097423f1acb1ddfa6ee6f9b6328b3e312422c7beeaf66c17e15a288e9"
+    },
+    {
+      "operation": "torch.mm",
+      "shape_mnk": [
+        1,
+        16,
+        5120
+      ],
+      "kernel_names": [
+        "tecoblas::ual::slave::teco_slave_gemm_NN_Afp16_Bfp16_Cfp16_allReduce(tecoblas::ual::ops::GemmWrapArgs)"
+      ],
+      "correctness": {
+        "max_abs_error": 2.0906329154968262e-05,
+        "passed": true
+      },
+      "trace_sha256": "261cb81fc9fbdcf08bcdff18ea8c237bc5c633e22cd9b236c31fff0ece16170a"
+    },
+    {
+      "operation": "torch.mm",
+      "shape_mnk": [
+        4,
+        32,
+        17408
+      ],
+      "kernel_names": [
+        "tecoblas::ual::slave::teco_slave_gemm_NN_Afp16_Bfp16_Cfp16_allReduce(tecoblas::ual::ops::GemmWrapArgs)"
+      ],
+      "correctness": {
+        "max_abs_error": 0.00011020898818969727,
+        "passed": true
+      },
+      "trace_sha256": "47d67ea50591f8f0d3461a078c1530c9ec6c3918b57df8e923b85670d0f4d93c"
+    },
+    {
+      "operation": "F.linear",
+      "shape_mnk": [
+        1,
+        32,
+        5120
+      ],
+      "kernel_names": [
+        "tecoblas::ual::slave::teco_slave_gemm_NT_Afp16_Bfp16_Cfp16_allReduce(tecoblas::ual::ops::GemmWrapArgs)"
+      ],
+      "correctness": {
+        "max_abs_error": 6.0886144638061523e-05,
+        "passed": true
+      },
+      "trace_sha256": "8e6ea282a56936d7f97137851c9afb411f61a9b401d6fcdff7a19384ca85c699"
+    },
+    {
+      "operation": "F.linear",
+      "shape_mnk": [
+        1,
+        64,
+        5120
+      ],
+      "kernel_names": [
+        "tecoblas::ual::slave::teco_slave_gemm_NT_Afp16_Bfp16_Cfp16_allReduce(tecoblas::ual::ops::GemmWrapArgs)"
+      ],
+      "correctness": {
+        "max_abs_error": 9.59634780883789e-05,
+        "passed": true
+      },
+      "trace_sha256": "79f6b0bb13fbdd95dc39a9d08bde249116dd76d167afa5cff2cdf00496c7446f"
+    },
+    {
+      "operation": "F.linear",
+      "shape_mnk": [
+        1,
+        16,
+        5120
+      ],
+      "kernel_names": [
+        "tecoblas::ual::slave::teco_slave_gemm_NT_Afp16_Bfp16_Cfp16_allReduce(tecoblas::ual::ops::GemmWrapArgs)"
+      ],
+      "correctness": {
+        "max_abs_error": 2.0906329154968262e-05,
+        "passed": true
+      },
+      "trace_sha256": "8de277d5a937b94a715d46a2de13b025a5188bc5ab67d6a229201fd3607f2036"
+    },
+    {
+      "operation": "F.linear",
+      "shape_mnk": [
+        4,
+        32,
+        17408
+      ],
+      "kernel_names": [
+        "tecoblas::ual::slave::teco_slave_gemm_NT_Afp16_Bfp16_Cfp16_allReduce(tecoblas::ual::ops::GemmWrapArgs)"
+      ],
+      "correctness": {
+        "max_abs_error": 0.00011020898818969727,
+        "passed": true
+      },
+      "trace_sha256": "7c5f66704fb5c7f7e672fc6a98d081d9095b500e8652a426fef3e02ddb008e32"
+    }
+  ],
+  "true_collective_control": {
+    "physical_devices": [
+      6,
+      7
+    ],
+    "world_size": 2,
+    "operations": [
+      "all_reduce",
+      "all_gather",
+      "reduce_scatter"
+    ],
+    "each_rank_cases": 9,
+    "gemm_allReduce_present": false
+  },
+  "full_evidence": "references/t100-allreduce-deep-review-20261012.md"
+}
