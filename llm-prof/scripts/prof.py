@@ -2,6 +2,7 @@
 """Explicit Perfetto window or exported-XLSX classification, without the UI."""
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,42 @@ from prof_analyze_perfetto import run_perfetto_query
 RAW_COLUMNS = ('name', 'record_count', 'total_duration_us', 'avg_duration_us',
                'kernel_relative_pct', 'window_absolute_pct')
 DEFAULT_CATEGORIES = ('kernel', 'gpu_memcpy', 'gpu_memset')
+
+
+def window_coverage(events, start_ns, end_ns, carry_in=()):
+    """Wall-time coverage, not a sum across overlapping device streams.
+
+    Includes WAIT/SET and clips every interval to the exact window. Carry-in
+    events affect coverage only; the original start-in-window SQL stays intact.
+    """
+    def merged_duration(rows):
+        intervals = sorted((max(start_ns,e['ts']),min(end_ns,e['ts']+e['dur']))
+                           for e in rows if e['dur'] > 0 and
+                           e['ts'] < end_ns and e['ts']+e['dur'] > start_ns)
+        total = 0
+        last = start_ns
+        for begin,end in intervals:
+            if end > last:
+                total += end-max(begin,last)
+                last = end
+        return total
+    if end_ns <= start_ns or any(e['dur'] < 0 for e in [*events,*carry_in]):
+        raise ValueError('coverage needs a positive window and completed device intervals')
+    selected = merged_duration(events)
+    covered = merged_duration([*events,*carry_in])
+    raw_sum = sum(e['dur'] for e in events)
+    return dict(window_total_us=(end_ns-start_ns)/1000,
+                selected_duration_sum_us=raw_sum/1000,
+                selected_covered_us=selected/1000,
+                device_covered_us=covered/1000,
+                overlap_or_outside_deduction_us=(raw_sum-selected)/1000,
+                carry_in_event_count=len(carry_in),
+                carry_in_extra_coverage_us=(covered-selected)/1000,
+                net_boundary_adjustment_us=(covered-raw_sum)/1000,
+                bubble_us=(end_ns-start_ns-covered)/1000,
+                bubble_pct=(end_ns-start_ns-covered)/(end_ns-start_ns)*100,
+                includes_wait_set=True,
+                definition='union of selected device intervals clipped to window, including carry-in; not GPU utilization')
 
 
 def us_to_ns(text):
@@ -43,7 +80,7 @@ def resolve_trace(path):
     return path
 
 
-def window_queries(start_ns, end_ns, categories=DEFAULT_CATEGORIES, track_ids=()):
+def window_queries(start_ns, end_ns, categories=DEFAULT_CATEGORIES, track_ids=(), device_id=None):
     if not 0 <= start_ns < end_ns:
         raise ValueError('require 0 <= start < end')
     if not categories or any('runtime' in c.lower() or c.lower() in
@@ -51,6 +88,8 @@ def window_queries(start_ns, end_ns, categories=DEFAULT_CATEGORIES, track_ids=()
         raise ValueError('only explicit device event categories are allowed, not CPU/runtime categories')
     literals = ', '.join("'" + str(c).replace("'", "''") + "'" for c in categories)
     tracks = ' AND track_id IN (' + ','.join(str(int(t)) for t in track_ids) + ')' if track_ids else ''
+    device = (" AND CAST(COALESCE(extract_arg(arg_set_id,'args.device'),extract_arg(arg_set_id,'args.device_id')) AS TEXT) = '"
+              +str(int(device_id))+"'") if device_id is not None else ''
     cte = f'''WITH time_window AS (
   SELECT {start_ns} AS start_offset_ns, {end_ns} AS end_offset_ns
 )
@@ -58,7 +97,7 @@ def window_queries(start_ns, end_ns, categories=DEFAULT_CATEGORIES, track_ids=()
     where = f'''FROM slice, trace_bounds, time_window tw
 WHERE category IN ({literals})
   AND ts >= trace_bounds.start_ts + tw.start_offset_ns
-  AND ts < trace_bounds.start_ts + tw.end_offset_ns{tracks}'''
+  AND ts < trace_bounds.start_ts + tw.end_offset_ns{tracks}{device}'''
     grouped = cte + '''SELECT name, COUNT(*) AS record_count,
   SUM(dur) / 1000.0 AS total_duration_us,
   SUM(dur) / COUNT(*) / 1000.0 AS avg_duration_us,
@@ -69,9 +108,9 @@ WHERE category IN ({literals})
     return grouped, events
 
 
-def analyze_window(tp, start_us, end_us, categories=DEFAULT_CATEGORIES, track_ids=()):
+def analyze_window(tp, start_us, end_us, categories=DEFAULT_CATEGORIES, track_ids=(), device_id=None):
     start, end = us_to_ns(start_us), us_to_ns(end_us)
-    sql, events_sql = window_queries(start, end, categories, track_ids)
+    sql, events_sql = window_queries(start, end, categories, track_ids, device_id)
     bounds = run_perfetto_query(tp, 'SELECT start_ts, end_ts FROM trace_bounds')[0]
     if end > bounds['end_ts'] - bounds['start_ts']:
         raise ValueError('requested window extends beyond trace_bounds; check relative time and units')
@@ -81,6 +120,11 @@ def analyze_window(tp, start_us, end_us, categories=DEFAULT_CATEGORIES, track_id
         raise ValueError('no device events in this window; check time origin, category and track selection')
     if any(e['dur'] < 0 for e in events):
         raise ValueError('selected events contain unfinished/negative durations; inspect the trace')
+    carry_sql = events_sql.replace(
+        'AND ts >= trace_bounds.start_ts + tw.start_offset_ns',
+        'AND ts < trace_bounds.start_ts + tw.start_offset_ns AND ts + dur > trace_bounds.start_ts + tw.start_offset_ns')
+    carry_in = run_perfetto_query(tp,carry_sql)
+    coverage = window_coverage(events,bounds['start_ts']+start,bounds['start_ts']+end,carry_in)
     metadata = dict(time_origin='trace_bounds.start_ts', start_us=str(start_us), end_us=str(end_us),
                     start_offset_ns=start, end_offset_ns=end, window_duration_us=(end-start)/1000,
                     trace_start_ts_ns=str(bounds['start_ts']), trace_end_ts_ns=str(bounds['end_ts']),
@@ -88,9 +132,11 @@ def analyze_window(tp, start_us, end_us, categories=DEFAULT_CATEGORIES, track_id
                     absolute_end_ts_ns=str(bounds['start_ts']+end),
                     selection='start-inclusive/end-exclusive; full duration, no clipping',
                     device_categories=list(categories), track_ids=sorted({e['track_id'] for e in events}),
+                    device_id=device_id,
                     selected_event_count=len(events),
                     events_crossing_end=sum(e['ts']+e['dur'] > bounds['start_ts']+end for e in events),
                     selected_total_duration_us=sum(e['dur'] for e in events)/1000)
+    metadata['window_coverage'] = coverage
     return rows, metadata, sql
 
 
@@ -188,11 +234,24 @@ def main(argv=None):
     window.add_argument('--stage', required=True, choices=('prefill','decode','all'))
     window.add_argument('--device-category', action='append', default=[])
     window.add_argument('--track-id', action='append', type=int, default=[])
+    window.add_argument('--device-id', type=int)
     window.add_argument('--trace-processor', help='Optional native trace_processor_shell path')
+    step = modes.add_parser('step', help='Nth annotation first associated device event to the next; includes WAIT/SET')
+    step.add_argument('--trace',required=True,type=Path)
+    step.add_argument('--stage',choices=('prefill','decode'),default='decode')
+    step.add_argument('--step',type=int,default=None,help='One-based index, default 2; needs a following annotation')
+    step.add_argument('--annotation-regex',help='Regex selecting a custom user_annotation sequence')
+    step.add_argument('--annotation-id',type=int)
+    step.add_argument('--next-annotation-id',type=int)
+    step.add_argument('--host-track-id',type=int)
+    step.add_argument('--device-id',type=int)
+    step.add_argument('--track-id',action='append',type=int,default=[])
+    step.add_argument('--device-category',action='append',default=[])
+    step.add_argument('--trace-processor')
     table = modes.add_parser('xlsx', help='Classify an exported XLSX, preserving original columns and file')
     table.add_argument('--xlsx', required=True, type=Path)
     table.add_argument('--sheet')
-    for sub in (window,table):
+    for sub in (window,step,table):
         sub.add_argument('--output-dir', required=True, type=Path)
         sub.add_argument('--label', default='prof-report', help='Output filename prefix (letters, digits, dot, dash, underscore)')
         sub.add_argument('--no-xlsx', action='store_true')
@@ -211,14 +270,26 @@ def main(argv=None):
             raise ValueError('report exists: choose another label/output directory or --overwrite')
         classifier = KernelClassifier(args.kernel_rules,platform=args.platform)
         sql = None
-        if args.mode == 'window':
+        if args.mode in ('window','step'):
             source = resolve_trace(args.trace)
             from perfetto.trace_processor import TraceProcessor, TraceProcessorConfig
             tp = TraceProcessor(trace=str(source), config=TraceProcessorConfig(
                 bin_path=args.trace_processor,load_timeout=60))
             try:
-                raw, metadata, sql = analyze_window(tp,args.start_us,args.end_us,
-                    tuple(dict.fromkeys(DEFAULT_CATEGORIES+tuple(args.device_category))),args.track_id)
+                categories=tuple(dict.fromkeys(DEFAULT_CATEGORIES+tuple(args.device_category)))
+                if args.mode=='step':
+                    from device_step_window import DeviceStepIndex,select_step_pair
+                    if args.step is not None and args.annotation_id is not None:
+                        raise ValueError('use --step or explicit annotation IDs, not both')
+                    index=DeviceStepIndex.from_processor(tp,categories,args.device_id,args.track_id)
+                    current,following=select_step_pair(index.annotations,args.stage,args.step if args.step is not None else 2,
+                        args.annotation_regex,args.host_track_id,args.annotation_id,args.next_annotation_id)
+                    evidence=index.window(current,following)
+                    start_us,end_us=evidence['start_us'],evidence['end_us']
+                else:
+                    start_us,end_us=args.start_us,args.end_us
+                raw, metadata, sql = analyze_window(tp,start_us,end_us,categories,args.track_id,args.device_id)
+                if args.mode=='step':metadata['device_step']=evidence
             finally:
                 tp.close()
             metadata['stage'] = args.stage
@@ -228,11 +299,14 @@ def main(argv=None):
                 raise ValueError('output must differ from source XLSX')
             raw, metadata = read_xlsx(source,args.sheet)
         kernels, summary, excluded, busy = classify_rows(raw,classifier)
-        if args.mode=='window':
+        if args.mode in ('window','step'):
             # Use full precision durations/window for category percentages, not rounded raw % sums.
             for item in summary+[excluded]:
                 item['window_absolute_pct']=item['total_duration_us']/metadata['window_duration_us']*100
         report = dict(mode=args.mode, source=str(source), metadata=metadata,
+            label=args.label if args.label!='prof-report' else
+                (f"{args.stage}-step{args.step if args.step is not None else 2}-device" if args.mode=='step' and args.annotation_id is None
+                 else f"{getattr(args,'stage','selected')}-window"),
             classification_rules=classifier.get_rule_provenance(), kernels=kernels,
             summary=summary, excluded=excluded, busy_total_duration_us=busy,
             raw_total_duration_us=sum(r['total_duration_us'] for r in kernels),
@@ -240,6 +314,10 @@ def main(argv=None):
                    'Category relative percentage excludes runtime markers. Full duration is used even across window end.',
                    'Summed durations may overlap across streams/devices; window percentage is not utilization or bubble.',
                    'Classification is name-based; evidence/confidence/ambiguity are preserved, not invocation source attribution.'])
+        layout_path=Path(__file__).resolve().parent.parent/'assets/report-layout.json'
+        layout_bytes=layout_path.read_bytes()
+        report['report_layout']={'version':json.loads(layout_bytes)['version'],
+                                 'sha256':hashlib.sha256(layout_bytes).hexdigest()}
         out.mkdir(parents=True,exist_ok=True)
         report_path=out/(args.label+'.json')
         report_path.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8')

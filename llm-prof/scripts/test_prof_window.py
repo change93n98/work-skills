@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kernel_categories import KernelClassifier
-from prof import analyze_window, classify_rows, read_xlsx, resolve_trace, us_to_ns, window_queries
+from prof import analyze_window, classify_rows, read_xlsx, resolve_trace, us_to_ns, window_queries, window_coverage
 
 
 class SqlProcessor:
@@ -60,6 +60,8 @@ class ExplicitWindowTests(unittest.TestCase):
         self.assertEqual(meta['events_crossing_end'],1)
         self.assertEqual(meta['absolute_start_ts_ns'],str(self.base+10000))
         self.assertEqual(sum(r['window_absolute_pct'] for r in rows),70)
+        self.assertEqual(meta['window_coverage']['carry_in_event_count'],1)
+        self.assertEqual(meta['window_coverage']['bubble_us'],0)
 
     def test_sql_raw_percent_keeps_wait_category_percent_excludes_it(self):
         self.insert('teco_slave_gemm(Args)',10000,1000)
@@ -130,6 +132,22 @@ class ExplicitWindowTests(unittest.TestCase):
         self.assertEqual([r['source_row'] for r in rows],[2,4])
         self.assertEqual(metadata['source_columns'],4)
         self.assertEqual(metadata['source_row_count'],4)
+
+    def test_coverage_merges_stream_overlap_and_keeps_wait(self):
+        metrics=window_coverage([dict(ts=0,dur=40),dict(ts=30,dur=20),
+                                 dict(ts=70,dur=10,name='WAIT'),dict(ts=85,dur=0,name='SET')],0,100)
+        self.assertEqual(metrics['selected_duration_sum_us'],.07)
+        self.assertEqual(metrics['device_covered_us'],.06)
+        self.assertEqual(metrics['bubble_us'],.04)
+        self.assertEqual(metrics['overlap_or_outside_deduction_us'],.01)
+
+    def test_coverage_clips_window_edges_and_accounts_carry_in(self):
+        metrics=window_coverage([dict(ts=70,dur=50)],0,100,[dict(ts=-10,dur=30)])
+        self.assertEqual(metrics['selected_covered_us'],.03)
+        self.assertEqual(metrics['carry_in_extra_coverage_us'],.02)
+        self.assertEqual(metrics['device_covered_us'],.05)
+        self.assertEqual(metrics['bubble_us'],.05)
+        self.assertEqual(metrics['net_boundary_adjustment_us'],0)
 
 
 if __name__=='__main__':unittest.main()

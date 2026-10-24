@@ -1,6 +1,6 @@
 # 指定窗口与 XLSX 入口
 
-`scripts/prof.py` 有 `window`、`xlsx` 两个子命令；抓取服务仍由 capture 流程负责，避免把服务启动参数混进离线分类。支持单个 JSON(.gz) 或 Perfetto 原生 trace，目录内多个 trace 明确报错。
+`scripts/prof.py` 有 `window`（手工时间）、`step`（关联首设备事件）、`xlsx` 三个子命令；抓取服务仍由 capture 流程负责。只给 step 编号时读取 [设备 step 关联选窗](device-step-window.md)，无需手工导出或提供起止时间。支持单个 JSON(.gz) 或 Perfetto 原生 trace，目录内多个 trace 明确报错。
 
 ## 运行环境
 
@@ -49,6 +49,6 @@ python3 scripts/prof.py xlsx --xlsx exported.xlsx --sheet 数据 \
 
 默认拒绝覆盖已有报告；使用新 label/目录，或明确 `--overwrite`。即使 overwrite 也不允许原地覆盖输入 XLSX。交付前另用 artifact-tool 渲染并查看汇总/明细，不将交互预览的生命周期混入批量导出。
 
-两种分母不可混用：原始相对占比包括所选 SQL 设备类别的全部事件（可含 WAIT/SET），分类相对占比只包括规则允许的六类设备事件。raw_total = busy_total + excluded_total。多流时 dur 相加可能超过墙钟时长，不自动生成空泡/利用率。
+两种分母不可混用：原始相对占比包括所选 SQL 设备类别的全部事件（可含 WAIT/SET），分类相对占比只包括规则允许的六类设备事件。raw_total = busy_total + excluded_total。window/step 模式另以原始逐事件区间计算 `metadata.window_coverage`：同一窗口内合并重叠、裁剪边缘并补入跨入覆盖，空泡=窗口−覆盖；不是直接用窗口减 dur 之和。WAIT/SET覆盖仍保留。仅有聚合XLSX缺少逐事件区间时，不声称能得到精确去重空泡。
 
 原生 API 与时间单位参考：[Perfetto Python API](https://perfetto.dev/docs/analysis/trace-processor-python)、[Perfetto SQL](https://perfetto.dev/docs/analysis/perfetto-sql-getting-started)。
