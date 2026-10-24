@@ -1,440 +1,68 @@
 ---
 name: llm-prof
 description: >
-  大模型推理profiling分析。启动vLLM/SGLang服务，执行bench profiling，分析trace输出prefill和decode算子耗时汇总表。
-  也支持直接分析已有的trace文件（快速模式），以及 graph-off 源码映射、graph-on 设备耗时的双 trace 分析。
-  触发词：prof分析、profiling、算子耗时、推理性能、trace分析、分析trace。
+  大模型推理 profiling 与 kernel 分类。支持三种入口：抓取 prof 并分析、已有 Perfetto 导出 XLSX 分类、
+  trace 路径加 Perfetto 开始/结束时间直接生成分类表。支持 NVIDIA、DCU、太初 T100，
+  以及 graph-off 来源映射与 graph-on 耗时分析。触发词：prof分析、profiling、算子耗时、trace分析、片选区域分类。
 ---
 
-# LLM Prof - 大模型推理算子耗时分析
+# LLM Prof
 
-## 必须收集的参数
+## 先选入口
 
-开始前确认以下信息，缺什么问什么：
+按用户已提供的输入直接进入对应模式，不需要每次展示菜单或让用户重新选。输入不明确时只询问缺少的模式或关键参数。
 
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| 推理框架 | vllm 或 sglang | vllm |
-| 模型路径 | 模型权重目录 | /module/Qwen3-32B-fp8 |
-| 并行方案 | TP/PP/DP | tp=4, pp=1 |
-| 并发数 | max-concurrency | 24 |
-| 输入长度 | random-input-len | 4000 |
-| 输出长度 | random-output-len | 20（建议20，避免prof文件过大） |
-| 运行目录 | 存放日志和prof文件的目录 | /home/client/aliyun/prof/qwen3-32b-0519 |
+| 模式 | 用户提供 | 执行方式 |
+| --- | --- | --- |
+| 1. 抓取 prof 并分类 | 需要启动服务/运行 profiling | 读取 [抓取与自动阶段分析](references/capture-and-auto-analysis.md)，仅此模式收集模型、框架、并行、负载、节点/容器等启动参数 |
+| 2. 已有 XLSX 分类 | Perfetto 导出的 XLSX，或已有分类表 | `scripts/prof.py xlsx`，保留旧列，在新文件追加分类列和最新汇总 |
+| 3. trace 指定窗口分类 | trace 文件/目录、阶段、开始和结束时间 | `scripts/prof.py window`，直接执行 Perfetto SQL，生成 XLSX、CSV、JSON、SQL，无需打开 UI |
 
-**多模态模型额外参数**（Qwen2.5-VL、InternVL 等视觉语言模型需要）：
+用户给 trace 但没有时间、希望自动找 prefill/decode 时，仍可使用 [自动阶段分析](references/capture-and-auto-analysis.md) 的快速模式。只有要求 Python/CPU 来源时才额外读取 [graph 双 trace 映射](references/graph-source-mapping.md)，不必为分类采集双 trace。
 
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| 多模态类型 | image / video | image |
-| 每请求图片数 | 每个请求输入的图片数量 | 10 |
-| 图片分辨率 | (H, W, 帧数) | (480, 854, 1) |
-| max_pixels | mm-processor-kwargs 中的图片像素上限 | 409920 |
-
-运行目录用于存放本次运行的所有产出物，便于后续回溯：
-```
-<运行目录>/
-├── serve.sh            # 服务启动脚本（可独立复用）
-├── serve_config.txt    # 环境变量+启动命令
-├── serve.log           # 服务端日志
-├── serve.pid           # 服务进程ID
-├── bench.log           # bench客户端日志
-└── *.json.gz           # prof trace文件
-```
-
-## 支持环境
-
-- **海光 DCU（ROCm）**：`HIP_VISIBLE_DEVICES`、RCCL、hipBLASLt/rocBLAS/CK
-- **NVIDIA GPU**：CUDA、NCCL、cuBLAS/cuBLASLt、CUTLASS、FlashAttention、Triton
-- **太初 T100**：识别 `tecoblas`、`tecolmk`、`tecodnn`、`tecocustom`、`tccl`、`sdaart` 等 trace kernel 命名
-
-分类规则的独立产物是 `rules/kernel-classification-rules.json`，含 `common`、`nv`、`dcu`、`teco` 分组；`scripts/kernel_categories.py` 负责读取和校验。所有分析/audit 入口支持 `--kernel-rules <JSON>` 和 `--platform auto|nv|dcu|teco`，报告记录规则版本与 SHA256。自动分类仍依据名字，并输出规则 ID、语义细分、证据强度与歧义；编写规则时的源码证据不等于当前调用的源码归因。外部代码读取与参数说明见 [分类产物](references/kernel-classification.md)。T100 语义证据见 `references/tecovllm-t100-kernel-knowledge.md`，此次实机审閱见 `references/teco-kernel-review-20261012.md`。
-
-如果用户提供了本地 T100 代码仓库，优先读取算子注册/API 和实现来确认语义，再扩展稳定的命名空间或算子模式；不要根据一个完整的模板实例名直接硬编码。
-
-以下服务启动示例主要面向海光 DCU；如果用户只提供 NVIDIA/T100 的已有 trace，直接使用“快速模式”，不套用 DCU 环境变量。
-
-## Step 0: 查找空闲卡
-
-启动服务前必须先确认有空闲卡，VRAM和HCU占用都为0：
+## 模式 3：trace 加时间窗口
 
 ```bash
-hy-smi
+python3 scripts/prof.py window \
+  --trace <trace.json.gz或目录> \
+  --start-us 34860750.232 --end-us 34936572.312 \
+  --stage decode --label decode-step2 \
+  --platform teco --output-dir <output_dir>
 ```
 
-输出示例：
-```
-HCU     Temp     AvgPwr     VRAM%      HCU%
-0       40.0C    158.0W     0%         0.0%     ← 空闲
-1       38.0C    160.0W     0%         0.0%     ← 空闲
-6       41.0C    160.0W     91%        0.0%     ← 显存占用，不可用
-```
+- 时间默认单位 µs，原点是 **Perfetto 的 `trace_bounds.start_ts`**，与相对 trace 起点的 UI 时间/用户 SQL 一致。不是 JSON 中的绝对 `ts`。用户给 ns/ms 时先明确换算，禁止凭最早 kernel 推算原点。
+- `stage` 是用户标签，不自动更改窗口。`decode-step2` 由用户确认，不能从任意片段猜测步数。
+- 与原 SQL 一致：只选 `ts >= start` 且 `ts < end` 的 `kernel/gpu_memcpy/gpu_memset`，按 name 分组，保留完整 dur，包括跨越窗口终点的事件。默认不裁剪、不按结束时间筛除。
+- 目录只有一个支持的 trace 才自动选取；多个文件必须分别指定，不能默认取第一个或合并不同 rank。
+- 默认选该 trace 的全部设备 track，与原 SQL 相同；用户要选某个设备时先查看 track/device 元数据，用重复 `--track-id` 限定，不能把所有 track 当同一张卡。国产 exporter 的其他明确设备类别可用重复 `--device-category` 补充，不能包含 CPU/runtime 类别。
+- 实现使用原生 Perfetto Trace Processor，不以 JSON 最小时间近似替代。依赖与完整参数见 [指定窗口与 XLSX 入口](references/window-and-xlsx.md)。
 
-选择VRAM%和HCU%都为0的卡，设置 `HIP_VISIBLE_DEVICES`。
-如果TP>1，需要选多张连续空闲卡，如 `export HIP_VISIBLE_DEVICES=0,1,2,3`。
-
-## Step 1: 创建运行目录并检查端口
-
-创建运行目录，所有产出物统一存放：
+## 模式 2：XLSX 加分类
 
 ```bash
-RUN_DIR="<运行目录>"
-mkdir -p "$RUN_DIR"
+python3 scripts/prof.py xlsx \
+  --xlsx <perfetto-export.xlsx> \
+  --platform teco --label reclassified --output-dir <output_dir>
 ```
 
-检查默认端口是否被占用，被占用则换一个空闲端口：
+识别第一行含 `name`、`record_count`、`total_duration_us` 的数据页；多个候选用 `--sheet` 选择。保留原文件、所有旧列与旧汇总，追加“最新分类结果”和独立的“最新分类汇总”；已有同名列/页则使用数字后缀，不能覆盖以前的版本。详细匹配证据和歧义写入同名 JSON。只读输入，输出文件必须与源文件不同。
 
-```bash
-# vLLM默认8000，SGLang默认30000
-DEFAULT_PORT=<默认端口>
-if ss -tlnp | grep -q ":${DEFAULT_PORT} "; then
-    # 找一个空闲端口
-    PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
-    echo "端口 $DEFAULT_PORT 被占用，使用空闲端口: $PORT"
-else
-    PORT=$DEFAULT_PORT
-    echo "端口 $PORT 可用"
-fi
-```
+## 三个模式共用的分类和统计约定
 
-## Step 2: 启动服务
+- 平台用 `--platform nv|dcu|teco|auto`，已知硬件时明确选择；规则统一来自 `rules/kernel-classification-rules.json`，可用 `--kernel-rules <JSON>` 覆盖。记录规则版本、SHA256、平台、输入文件及窗口。
+- 模式3数据页前六列保持用户 SQL：`name, record_count, total_duration_us, avg_duration_us, kernel_relative_pct, window_absolute_pct`。模式2完整保留输入列。原始 SQL 相对占比包括被 exporter 标为设备事件的 WAIT/SET，便于与原 SQL 对账。
+- 分类汇总的六类为 GEMM、通信、FlashAttention、Triton、其他elementwise、memcpy/memset；精确 WAIT/SET 等规则排除项单列，不进入六类相对占比的分母。不能直接把明细已四舍五入的百分比当精确分类占比。
+- 不用“窗口减去所有 dur 之和”推算空泡。多流/多设备可重叠，相加占比可能超过100%；类别窗口占比不代表利用率。XLSX 只有舍入后的窗口占比时不能恢复精确窗口/空泡。
+- 分类仍依据名字；保留 rule ID、semantic_type、confidence、evidence、ambiguity_reasons 和候选类别。`fallback:unknown` 不代表语义已确认，按耗时报告未知/歧义项，不能用泛厂商前缀消除 unknown。
+- “其他elementwise”是兼容桶，包含归约、布局、卷积、采样等，不能全部描述为逐元素。融合 FFN GEMM 与 activation helper 分开；已实测的 TecoBLAS NN/NT FP16 GEMM allReduce 是 GEMM，未验证变体仍标 unknown。
 
-### vLLM
+分类规则 API 和优先级见 [独立分类产物](references/kernel-classification.md)。T100 证据见 [API/源码依据](references/tecovllm-t100-kernel-knowledge.md)、[逐核审阅](references/teco-kernel-review-20261012.md)、[allReduce 实测复核](references/t100-allreduce-deep-review-20261012.md)。
 
-参考: `references/vllm-serve-example.sh`、`references/vllm-serve-h.log`
+## 验证与交付
 
-先将启动脚本写入运行目录，再执行：
+1. 对齐时间原点、单位、设备范围和 SQL 入窗方式。空结果或越界应明确报错，不自动扩大窗口。
+2. 核对原始调用次数/总耗时、六类合计与排除项守恒；高耗时 unknown/歧义项保留待确认状态。
+3. XLSX 用 artifact-tool 导出，检查汇总与明细并回读。已有表格追加分类时核对旧值/公式/格式，不能只验证文件存在。
+4. 交付 XLSX 与简洁分类结果，说明窗口、分母和未知项。JSON/SQL 留在输出目录便于复核。
 
-```bash
-# 纯文本模型
-cat > "$RUN_DIR/serve.sh" << 'SCRIPT'
-#!/bin/bash
-set -euo pipefail
-
-export HIP_VISIBLE_DEVICES=<gpu_ids>
-export HSA_FORCE_FINE_GRAIN_PCIE=1
-export NCCL_MAX_NCHANNELS=16
-export NCCL_MIN_NCHANNELS=16
-export ALLREDUCE_STREAM_WITH_COMPUTE=1
-export VLLM_USE_PIECEWISE=0
-export HIP_ALLOC_INITIALIZE=0
-export GPU_MAX_HW_QUEUES=3
-export VLLM_TORCH_PROFILER_DIR="$(dirname "$0")/prof"
-
-vllm serve <model_path> \
-    -tp <tp> -pp <pp> \
-    --port <port> \
-    --dtype auto \
-    --kv-cache-dtype fp8_e4m3 \
-    --profiler-config "{\"profiler\": \"torch\", \"torch_profiler_dir\": \"$(dirname "$0")/prof\", \"torch_profiler_with_stack\": true, \"torch_profiler_record_shapes\": true}"
-SCRIPT
-chmod +x "$RUN_DIR/serve.sh"
-bash "$RUN_DIR/serve.sh" > "$RUN_DIR/serve.log" 2>&1 &
-echo $! > "$RUN_DIR/serve.pid"
-
-# 多模态模型（如 Qwen2.5-VL）额外需要：
-cat > "$RUN_DIR/serve.sh" << 'SCRIPT'
-#!/bin/bash
-set -euo pipefail
-
-export HIP_VISIBLE_DEVICES=<gpu_ids>
-export HSA_FORCE_FINE_GRAIN_PCIE=1
-export NCCL_MAX_NCHANNELS=16
-export NCCL_MIN_NCHANNELS=16
-export ALLREDUCE_STREAM_WITH_COMPUTE=1
-export VLLM_USE_PIECEWISE=0
-export HIP_ALLOC_INITIALIZE=0
-export GPU_MAX_HW_QUEUES=3
-export VLLM_TORCH_PROFILER_DIR="$(dirname "$0")/prof"
-
-vllm serve <model_path> \
-    -tp <tp> -pp <pp> \
-    --port <port> \
-    --no-enable-prefix-caching \
-    --enable-chunked-prefill \
-    --limit-mm-per-prompt '{"image": <n_image>, "video": 0}' \
-    --mm-processor-kwargs '{"max_pixels": <max_pixels>}' \
-    --profiler-config "{\"profiler\": \"torch\", \"torch_profiler_dir\": \"$(dirname "$0")/prof\", \"torch_profiler_with_stack\": true, \"torch_profiler_record_shapes\": true}"
-SCRIPT
-chmod +x "$RUN_DIR/serve.sh"
-bash "$RUN_DIR/serve.sh" > "$RUN_DIR/serve.log" 2>&1 &
-echo $! > "$RUN_DIR/serve.pid"
-```
-
-### SGLang
-
-参考: `references/sglang-serve-example.sh`、`references/sgl-serve-h.log`
-
-```bash
-cat > "$RUN_DIR/serve.sh" << 'SCRIPT'
-#!/bin/bash
-set -euo pipefail
-
-export HIP_VISIBLE_DEVICES=<gpu_ids>
-export SGLANG_ENABLE_SPEC_V2=1
-export USE_DCU_CUSTOM_ALLREDUCE=1
-export ALLREDUCE_STREAM_WITH_COMPUTE=1
-export SGLANG_KV_LAYOUT_DCU_FA=1
-export SGLANG_USE_LIGHTOP=1
-export SGLANG_USE_FP8_W8A8_MOE=1
-
-sglang serve \
-    --model-path <model_path> \
-    --host 0.0.0.0 --port <port> \
-    --trust-remote-code --dtype bfloat16 \
-    --kv-cache fp8_e4m3 \
-    --tp-size <tp> --pp-size <pp> \
-    --mem-fraction-static 0.85 \
-    --attention-backend fa3 \
-    --page-size 64 \
-    --cuda-graph-max-bs 512
-SCRIPT
-chmod +x "$RUN_DIR/serve.sh"
-bash "$RUN_DIR/serve.sh" > "$RUN_DIR/serve.log" 2>&1 &
-echo $! > "$RUN_DIR/serve.pid"
-```
-
-启动后保存配置到运行目录：
-
-```bash
-cat > "$RUN_DIR/serve_config.txt" << EOF
-Framework: <vllm|sglang>
-Model: <model_path>
-TP: <tp>, PP: <pp>
-Port: $PORT
-GPU: $HIP_VISIBLE_DEVICES
-Concurrency: <concurrency>
-Input len: <input_len>
-Output len: <output_len>
-Multimodal: <yes|no>
-  Type: <image|video>
-  Items per request: <n>
-  Resolution: <H>x<W>x<frames>
-  max_pixels: <max_pixels>
-Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
-EOF
-```
-
-## Step 3: 验证服务
-
-```bash
-curl -s http://localhost:$PORT/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "<model>", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 10}'
-```
-
-确认正常返回后继续。
-
-## Step 4: 执行Profiling
-
-### vLLM
-
-参考: `references/vllm-bench-h.log`
-
-**纯文本模型：**
-```bash
-vllm bench serve \
-  --backend openai-chat \
-  --model <model_path> \
-  --endpoint /v1/chat/completions \
-  --dataset-name random \
-  --num-prompts <concurrency> \
-  --max-concurrency <concurrency> \
-  --random-input-len <input_len> \
-  --random-output-len <output_len> \
-  --ignore-eos --profile --port $PORT \
-  > "$RUN_DIR/bench.log" 2>&1
-```
-
-**多模态模型（如 Qwen2.5-VL）：**
-```bash
-vllm bench serve \
-  --backend openai-chat \
-  --model <model_path> \
-  --endpoint /v1/chat/completions \
-  --dataset-name random-mm \
-  --num-prompts <concurrency> \
-  --max-concurrency <concurrency> \
-  --random-input-len <input_len> \
-  --random-output-len <output_len> \
-  --random-mm-base-items-per-request <n_image> \
-  --random-mm-limit-mm-per-prompt '{"image": <n_image>, "video": 0}' \
-  --random-mm-bucket-config '{(<H>, <W>, 1): 1.0}' \
-  --ignore-eos --profile --port $PORT \
-  > "$RUN_DIR/bench.log" 2>&1
-```
-
-多模态参数说明：
-- `--dataset-name random-mm`：使用随机多模态数据集
-- `--random-mm-base-items-per-request`：每请求的图片/视频基准数量
-- `--random-mm-limit-mm-per-prompt`：每请求多模态数量上限，格式同 serve 的 `--limit-mm-per-prompt`
-- `--random-mm-bucket-config`：图片/视频分辨率桶配置，key 为 `(H, W, 帧数)`，value 为采样概率（需归一化）
-
-### SGLang
-
-参考: `references/sgl-bench-h.log`
-
-```bash
-python -m sglang.bench_serving \
-  --backend sglang \
-  --model <model_path> \
-  --host localhost --port $PORT \
-  --dataset-name random \
-  --random-range-ratio 1 \
-  --random-input-len <input_len> \
-  --random-output-len <output_len> \
-  --num-prompts <concurrency> \
-  --profile --profile-output-dir "$RUN_DIR/prof" \
-  > "$RUN_DIR/bench.log" 2>&1
-```
-
-## Step 5: 分析Trace
-
-如果 decode 使用 CUDA/HIP/SDAA graph，且需要 CPU 算子或 Python 来源，读取 [graph 双 trace 流程](references/graph-source-mapping.md)，使用 `scripts/prof_graph_analyze.py`。先采集 graph-off 建立来源映射，再采集真实 graph-on replay 统计设备耗时；单份 graph-on trace 的 `with_stack` 不能恢复未执行的逐算子 host 调用链。需要确认两次运行的配置、实际 graph 开关、阶段窗口及 rank/设备一致。
-
-```bash
-python3 scripts/prof_graph_analyze.py \
-  --mapping-trace <graph-off-decode.json.gz> \
-  --formal-trace <graph-on-decode.json.gz> \
-  --stage decode --output-dir <output_dir>
-```
-
-这个入口只从 graph-on 的明确设备事件取 dur，不把 cpu_op 当设备耗时；不依赖 model_forward 阶段标记。输出 JSON/CSV/文本及可选 XLSX，标记 `match_basis`、每个候选的 `attribution_basis`、`source_status`、`ambiguity_reasons`。多来源不强选唯一位置，无法关联则保留未知。跨 trace 只按完整/有限规范化符号匹配，不使用两次运行的关联 ID；类别仍按名字分类。详细采集、国产卡后端开关验证、窗口选择和配置审计见上述参考。
-
-Profiling生成 `.pt.trace.json.gz` 或 `.json.gz`，在运行目录中找到并分析：
-
-```bash
-# 找到trace文件
-TRACE_FILE=$(find "$RUN_DIR" -name "*.json.gz" -newer "$RUN_DIR/serve_config.txt" | head -1)
-
-# 运行分析，结果也输出到运行目录
-python3 scripts/prof_analyze.py --trace-file "$TRACE_FILE" --output-dir "$RUN_DIR" --verbose
-```
-
-分析完成后运行目录结构：
-```
-$RUN_DIR/
-├── serve.sh                   # 服务启动脚本（可独立复用）
-├── serve_config.txt           # 启动配置
-├── serve.log                  # 服务端日志
-├── serve.pid                  # 服务进程ID
-├── bench.log                  # bench客户端日志
-├── prof/                      # prof trace文件
-│   └── *.json.gz
-├── prof_analysis.xlsx         # 分析报告（4个子表）
-├── prof_analysis_summary.txt  # 文本摘要
-└── prof_analysis.json         # JSON结果
-```
-
-分析逻辑：
-- 通过 `model_forward` slice划分阶段：自动检测慢/快step分界（最后一个>100ms的gap）
-  - Prefill = trace开始 → 第一个快step开始（包含warmup gap）
-  - Decode step N = 快step阶段的第N个step（正向索引，默认N=2）
-- 算子分六类：gemm、通信、FlashAttention、Triton、其他elementwise、memcpy/memset
-- 分类兼容 DCU、NVIDIA 和太初 T100；T100 的 `WAIT` 运行时等待标记不计入 kernel busy time，而计入 bubble/idle
-- 分类规则同时输出 `classification_rule`；`fallback:unknown` 必须通过 audit 脚本检查，不允许静默认为分类正确
-- 明细保留 `semantic_type`、`classification_confidence`、`classification_ambiguity` 和候选类别；“其他elementwise”是兼容桶，不等于全部逐元素。FFN 融合 GEMM 与激活 helper 分开。已由单设备纯矩阵乘实测确认的 TecoBLAS NN/NT fp16 allReduce 归 GEMM；未验证变体仍报告 unknown，不能按 allReduce 字样认定通信。
-
-### XLSX输出（4个子表）
-
-| Sheet | 内容 | 列 |
-|-------|------|-----|
-| Prefill详细算子 | 每个kernel的耗时明细 | 算子名称、分类、分类规则、调用次数、总耗时(us)、平均耗时(us)、相对占比(%)、绝对占比(%) |
-| Prefill分类汇总 | 按6大类汇总 | 分类、算子种类数、调用次数、总耗时(us)、总耗时(ms)、相对占比(%) |
-| Decode-Step2详细算子 | 每个kernel的耗时明细 | 同上 |
-| Decode-Step2分类汇总 | 按6大类汇总 | 同上 |
-
-**相对占比**: 占所有kernel总耗时的百分比（不含空泡）
-**绝对占比**: 占该阶段时间窗口的百分比（含空泡/GPU idle）
-
-依赖: `pip install openpyxl`
-
-## 输出示例
-
-```
-============================================================
-  Prefill阶段算子耗时分析
-============================================================
-类别                  总耗时(ms)    调用次数    占比(%)
-------------------------------------------------------------
-gemm                      50.02        591     44.37%
-通信 (comm)                 0.00          0      0.00%
-FlashAttention (fa)        4.95          8      4.39%
-Triton                    17.73        489     15.72%
-其他elementwise            40.05        200     35.52%
-memcpy/memset               0.00          0      0.00%
-------------------------------------------------------------
-总计                      112.74       1288    100.00%
-============================================================
-
-============================================================
-  Decode阶段算子耗时分析 (Step 2)
-============================================================
-类别                  总耗时(ms)    调用次数    占比(%)
-------------------------------------------------------------
-gemm                       6.83         85     88.62%
-通信 (comm)                 0.00          0      0.00%
-FlashAttention (fa)        0.00          0      0.00%
-Triton                      0.44         72      5.73%
-其他elementwise              0.44         36      5.65%
-memcpy/memset               0.00          0      0.00%
-------------------------------------------------------------
-总计                        7.70        193    100.00%
-============================================================
-```
-
-## 分类审计（推荐在新硬件/新版本上执行）
-
-先审计，再把汇总表用于性能结论：
-
-```bash
-python3 scripts/audit_kernel_categories.py \
-  <trace.json.gz 或 kernel明细.xlsx> \
-  --output kernel_classification_audit.json
-```
-
-审计报告按分类规则统计调用次数和耗时，并列出 `fallback:unknown` 的 kernel。
-新硬件的完成标准不是“所有名字都命中某个字符串”，而是：
-
-1. 通信、内存、attention、GEMM 等高影响类别没有明显语义冲突；
-2. fallback 未知项按耗时从高到低人工检查；
-3. 对新增稳定算子模式补充回归测试；
-4. 重新运行真实 trace，确认 kernel 总耗时守恒，WAIT/profiler marker 不进入 busy kernel。
-
-`--fail-on-fallback` 只适合规则收敛阶段；未知 kernel 在探索新平台时可以先报告、再确认，不能直接把 fallback 当作正确证据。
-
-## 快速模式：仅分析已有Trace文件
-
-如果已经有trace文件（`.json.gz`或`.pt.trace.json.gz`），直接跳过前面所有步骤：
-
-**需要的信息：**
-- trace文件路径
-- 输出目录（可选，默认与trace同目录）
-- decode step编号（可选，默认2，指快decode阶段的第2个step）
-
-**执行：**
-```bash
-python3 scripts/prof_analyze.py \
-  --trace-file <trace.json.gz> \
-  --output-dir <output_dir> \
-  --decode-step 2 \
-  --verbose
-```
-
-输出：
-- `<output_dir>/prof_analysis.xlsx` — 4个子表的Excel报告
-- `<output_dir>/prof_analysis_summary.txt` — 文本摘要
-- `<output_dir>/prof_analysis.json` — JSON结果
-
-## 参考文件（`references/`目录）
-
-- `vllm-serve-h.log` / `sgl-serve-h.log` — serve参数帮助
-- `vllm-bench-h.log` / `sgl-bench-h.log` — bench参数帮助
-- `vllm-serve-example.sh` / `sglang-serve-example.sh` — 启动脚本示例
-- `vllm-prof-guide.md` / `sglang-prof-guide.md` — profiling指南
-- `prof算子耗时占比分析.pdf` — 分析原理
-- `perfetto-sql-py工具.pdf` — Perfetto SQL工具
-- `kernel-classification.md` — DCU/NVIDIA/太初 T100 kernel 命名与分类扩展规则
-- `teco-kernel-review-20261012.md` — 知识库、34 节点 trace 与预期 API 的审閱范围、重要修正和未决项
-- `tecovllm-t100-kernel-knowledge.md` — 基于本地 tecovllm API/实现的 T100 语义证据
-- `graph-source-mapping.md` — CUDA/HIP/T100-SDAA graph 的双 trace 采集、来源匹配与歧义审计
+新入口不替换原自动阶段/双 trace 分析器；其输出文件和命令保持兼容。
