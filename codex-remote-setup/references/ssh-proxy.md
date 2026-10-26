@@ -1,15 +1,12 @@
----
-name: codex-ssh-proxy
-description: 配置或检查远程 Codex CLI、VS Code Codex 扩展经 SSH 反向隧道使用本地 v2rayN/HTTP 代理。用户说“给远程节点配置 Codex SSH代理”“远程 Codex 走本地代理”“检查 SSH 代理”时使用。不是 CC Switch 的 API 转发、供应商切换或远程独立 Xray 部署。
----
-
 # Codex SSH 代理
 
 在运行本地 HTTP 代理的电脑执行本技能，通过 SSH 自动配置远程 Linux。
-入口是 `scripts/set_codex_ssh_proxy.py`，不依赖 PowerShell，不需要用户把脚本上传服务器。
+以下命令从 skill 根目录执行。入口是 `scripts/proxy/set_codex_ssh_proxy.py`，不依赖 PowerShell，不需要用户把脚本上传服务器。
 本地需要 Python 3.8+ 和 OpenSSH，远程需要 Python 3.8+、curl，以及已安装的 Codex CLI 或远程扩展。
 
 ## 选择节点和操作
+
+先识别是否已有动态反向端口、稳定 relay 或自动重连守护。若已有 `~/.local/lib/codex-ssh-tunnel/control.py`、目标端口记录或本地 tunnel supervisor，先读取其实际配置和只读状态检查，保留已有拓扑；不要为满足下方静态 `RemoteForward` 模板而覆写正常工作的自动重连通道。静态模板检查不通过也不能单独证明动态隧道故障。
 
 先用 `--list` 读取当前用户的 SSH config，按实际别名解析用户提到的 IP 或节点简称。
 不维护固定节点清单；简称存在多个候选时才询问。
@@ -19,10 +16,10 @@ description: 配置或检查远程 Codex CLI、VS Code Codex 扩展经 SSH 反�
 在本技能目录下运行（解释器按本机可用路径选择，`dev-node` 替换成实际 SSH 别名）：
 
 ```bash
-python scripts/set_codex_ssh_proxy.py --list
-python scripts/set_codex_ssh_proxy.py --nodes dev-node
-python scripts/set_codex_ssh_proxy.py --nodes dev-node --check-only
-python scripts/set_codex_ssh_proxy.py --all
+python scripts/proxy/set_codex_ssh_proxy.py --list
+python scripts/proxy/set_codex_ssh_proxy.py --nodes dev-node
+python scripts/proxy/set_codex_ssh_proxy.py --nodes dev-node --check-only
+python scripts/proxy/set_codex_ssh_proxy.py --all
 ```
 
 参数：
@@ -61,7 +58,7 @@ Include 不展开，通配符/多别名/重复 Host 块不自动改写；需要�
 
 出现重连时，先核对该入口的日志是否为 WebSocket 连接失败、是否随后 `falling back to HTTP`，再对照实际代理环境。Linux 的 CLI 启动器已显式设置代理环境；不要因 Windows 上的复现就给所有远程节点关闭 WebSocket。
 先验证显式代理是否能修复 WebSocket；只有代理路径仍失败而 HTTP 路径成功后，才考虑针对选定入口配置 `supports_websockets=false`。这个选项只作用于实际选中的供应商；恢复旧聊天可能沿用旧供应商，不能用新 CLI 会话的成功替代旧聊天验证。保留原模型和认证，内置供应商 ID `openai` 不能直接覆盖。
-用户同时要求排查本机 Windows 桌面端的启动重连时，读 [Windows 桌面重连排查](references/windows-reconnect.md)。这是条件排查说明；执行远程配置时不自动修改本机的用户级代理环境。
+用户同时要求排查本机 Windows 桌面端的启动重连时，读 [Windows 桌面重连排查](windows-reconnect.md)。这是条件排查说明；执行远程配置时不自动修改本机的用户级代理环境。
 侧栏需重新连接 Remote-SSH 并重载窗口，不能把 CLI 测试当作实际侧栏 UI 验证。
 若有失败，报告具体节点，检查原因后只重试该节点；不要反复原样重试。
 
@@ -71,5 +68,5 @@ Include 不展开，通配符/多别名/重复 Host 块不自动改写；需要�
 
 ## 维护验证
 
-修改脚本后，从本技能目录运行 `python -m unittest discover -s tests -p 'test_*.py' -v`。
+修改脚本后，从本技能目录运行 `python -m unittest discover -s tests/proxy -p 'test_*.py' -v`。
 再对选定节点运行 `--check-only`；回归测试不能替代远程连接验证或实际入口的模型请求。

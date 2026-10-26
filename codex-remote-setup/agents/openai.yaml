@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex 远程节点配置"
+  short_description: "统一配置远程 Codex 的 SSH 代理与 VS Code 或 Kylin 文件跳转"
+  default_prompt: "使用 $codex-remote-setup 为指定 SSH 节点检查或配置代理和文件跳转，仅执行需要的模块。"

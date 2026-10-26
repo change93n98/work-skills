@@ -9,7 +9,7 @@ Claude Code / Codex 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)**
 | [blas-compare](#skill-1-blas-compare---gemm-性能对比) | 在容器内对比基线 / 优化后 rocBLAS 的 GEMM 性能，自动采集 GFLOPS 与耗时并生成对比表 |
 | [blaslt-compare](blaslt-compare/SKILL.md) | hipBLASLt GEMM 性能对比：批量执行 `hipblaslt-bench`，采集 GFLOPS、耗时与 kernel 名称 |
 | [cc-switch-claude-401](#skill-6-cc-switch-claude-401---claude-cli-401-排障) | 修复 cc-switch 启动的 Claude CLI 报 401 / 密钥冲突警告：定位失效 key，把 token 归位到正确的认证字段 |
-| [codex-ssh-proxy](codex-ssh-proxy/SKILL.md) | 通过 SSH 反向隧道让远程 Codex CLI / VS Code 扩展使用本地 HTTP 代理，支持按节点配置、备份和只读检查 |
+| [codex-remote-setup](codex-remote-setup/SKILL.md) | 远程 Codex 配置统一入口：按需处理 SSH HTTP 代理、重连排查，以及 VS Code/Kylin 文件打开与行号跳转 |
 | [who-use-gpu](#skill-8-who-use-gpu---加速卡占用反查) | 反查「节点 X 的物理卡 N 被哪个容器占用」：卡 → 占用进程 PID → `docker top` / cgroup 定位容器名 |
 | [install-vscode-server](install-vscode-server/SKILL.md) | 在远程容器 / 服务器内快速安装 VS Code Server，绕过 Remote 连接时的慢速自动下载 |
 | [llm-prof](#skill-2-llm-prof---大模型推理-profiling-分析) | 启动 vLLM / SGLang 服务跑 bench profiling，分析 trace 输出 prefill / decode 算子耗时汇总表 |
@@ -41,7 +41,7 @@ cp -r remote-dev ~/.claude/skills/
 
 # Codex 用户级 skill
 cp -r reliable-task-execution ~/.codex/skills/
-cp -r codex-ssh-proxy ~/.codex/skills/
+cp -r codex-remote-setup ~/.codex/skills/
 ```
 
 安装后在对应 Agent 对话中触发关键词，或使用显式 skill 名称调用。
@@ -449,11 +449,13 @@ work-skills/
 │   └── SKILL.md
 ├── cc-switch-claude-401/      # cc-switch Claude CLI 401 排障 skill
 │   └── SKILL.md
-├── codex-ssh-proxy/           # 远程 Codex 经 SSH 使用本地 HTTP 代理
+├── codex-remote-setup/        # 远程 Codex 代理与文件跳转的统一入口
 │   ├── SKILL.md
-│   └── scripts/
-│       ├── set_codex_ssh_proxy.py
-│       └── configure_remote.py
+│   ├── references/           # 代理、Windows 重连、Kylin 文件跳转与 ABI 前提
+│   ├── scripts/
+│   │   ├── proxy/            # SSH 代理配置与诊断
+│   │   └── kylin/            # 每节点文件桥接实例生成器与远端 helper
+│   └── tests/proxy/
 ├── who-use-gpu/      # 加速卡占用反查 skill
 │   ├── SKILL.md
 │   └── scripts/
@@ -526,13 +528,15 @@ pip install torch transformers vllm
 - 本机已安装 cc-switch（读写 `~/.cc-switch/cc-switch.db`；改库前须先关 cc-switch 进程）
 - 仅适用 Windows 上由 cc-switch 启动的 Claude CLI
 
-### codex-ssh-proxy 依赖
+### codex-remote-setup 依赖
 
 - 本地：Python 3.8+（仅标准库）、OpenSSH，以及已运行的 HTTP 代理
 - 远程：Python 3.8+、curl，以及 Codex CLI 或远程 Codex 扩展
 - 在本地电脑调用；先用 `--list` 查别名，再用 `--nodes dev-node` 配置，或添加 `--check-only` 只检查
 - 使用 `--all` 才会操作全部明确节点；本地代理与承载转发的 SSH 连接需要保持在线
 - Skill 不附带 SSH 私钥、ChatGPT 登录令牌、代理订阅或真实节点配置
+- Kylin 文件模块：本地 Python 3.11+，远端 Python 3.8+、`ss`，以及已连接并打开项目的 Kylin/Remote - Dev
+- 原 `codex-ssh-proxy` 和 `codex-kylin-open` 已合并；升级本地 skill 时先备份旧目录，再只保留 `codex-remote-setup` 入口。已部署的运行脚本和任务保持原路径。
 
 ### who-use-gpu 依赖
 

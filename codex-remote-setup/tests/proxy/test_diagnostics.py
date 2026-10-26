@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 
-SOURCE = Path(__file__).resolve().parents[1] / 'scripts' / 'configure_remote.py'
+SOURCE = Path(__file__).resolve().parents[2] / 'scripts' / 'proxy' / 'configure_remote.py'
 spec = importlib.util.spec_from_file_location('configure_remote', SOURCE)
 remote = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(remote)
