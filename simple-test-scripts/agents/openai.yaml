@@ -1,0 +1,4 @@
+interface:
+  display_name: "简洁模型服务与测试脚本"
+  short_description: "简洁编写模型服务端、测试客户端与性能脚本，直接复用指定入口，不擅自包装"
+  default_prompt: "使用 $simple-test-scripts，基于我指定的仓库或参考命令，按需求创建简洁清晰的模型服务端、测试客户端或性能测试脚本。"

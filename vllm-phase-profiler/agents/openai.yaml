@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM 阶段与 Graph 标注"
+  short_description: "为 vLLM trace 标注实际阶段与选图模式，并核验短 prefill 的 graph 调用"
+  default_prompt: "使用 $vllm-phase-profiler 在独立诊断副本中给模型 forward 加上 PHASE_GRAPH 标注，采集并核验 trace。"

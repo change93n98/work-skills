@@ -17,7 +17,9 @@ Claude Code / Codex 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)**
 | [reliable-task-execution](#skill-7-reliable-task-execution---可靠任务执行) | 按任务风险自适应选择 Quick / Standard / Extended 流程，建立可恢复计划、分层验证和基于证据的完成状态 |
 | [remote-agent-config](#skill-5-remote-agent-config---远程-agent-配置同步) | 从 cc-switch 预设渲染 Claude Code / Codex 配置并推送到远程节点，直连模型 API、摆脱反向 SSH 隧道；亦可把 VS Code 扩展配置写进本机 WSL |
 | [remote-dev](#skill-9-remote-dev---远程开发容器) | 从电脑或远程节点通过 SSH 准备 Docker 容器、派发任务并检查进度与结果（太初 / NVIDIA / 通用兜底） |
+| [simple-test-scripts](simple-test-scripts/SKILL.md) | 直接复用指定入口编写简洁的模型服务端、性能和精度测试脚本，保留已确认的提测基准与环境准备规范 |
 | [ssh-docker](#skill-4-ssh-docker---远程-ssh-docker-工作流) | 通过 SSH + `docker exec` 在远程容器执行编译 / 测试 / profiling，代码本地编辑再同步 |
+| [vllm-phase-profiler](vllm-phase-profiler/SKILL.md) | 在独立诊断副本中标注实际 prefill/decode 阶段、token 数与 Graph 模式，并核验 trace 中的 scope |
 
 其余章节：[安装](#安装) · [项目结构](#项目结构) · [依赖](#依赖) · [许可证](#许可证) · [作者](#作者)
 
@@ -42,6 +44,8 @@ cp -r remote-dev ~/.claude/skills/
 # Codex 用户级 skill
 cp -r reliable-task-execution ~/.codex/skills/
 cp -r codex-remote-setup ~/.codex/skills/
+cp -r simple-test-scripts ~/.codex/skills/
+cp -r vllm-phase-profiler ~/.codex/skills/
 ```
 
 安装后在对应 Agent 对话中触发关键词，或使用显式 skill 名称调用。
@@ -490,8 +494,18 @@ work-skills/
 │   └── sync.py                # 推送脚本（须与 SKILL.md 平级）
 ├── remote-dev/                # 远程开发容器 skill
 │   └── SKILL.md
-└── ssh-docker/                # SSH Docker 远程工作流 skill
-    └── SKILL.md
+├── simple-test-scripts/       # 简洁模型服务、性能与精度提测脚本
+│   ├── SKILL.md
+│   ├── agents/openai.yaml
+│   ├── assets/precision_submission_baseline.sh
+│   └── references/precision-submission-baseline.md
+├── ssh-docker/                # SSH Docker 远程工作流 skill
+│   └── SKILL.md
+└── vllm-phase-profiler/       # 阶段与实际 Graph 模式标注
+    ├── SKILL.md
+    ├── agents/openai.yaml
+    ├── references/annotation-template.md
+    └── scripts/inspect_phase_trace.py
 ```
 
 ## 依赖
@@ -512,6 +526,12 @@ pip install torch transformers vllm
 
 - Windows: OpenSSH 客户端
 - 远程节点: Docker, SSH 服务
+
+### simple-test-scripts / vllm-phase-profiler 依赖
+
+- 编写脚本或准备诊断说明时不自动安装环境，也不启动模型服务。
+- 精度测试依赖跟随用户指定的测试仓库和实际 checkout；示例模型、地址、路径及环境名按本次任务调整。
+- `vllm-phase-profiler/scripts/inspect_phase_trace.py` 使用 Python 3 和 `ijson` 读取 JSON / gzip trace；运行检查时使用已有 profiling 环境。
 
 ### remote-agent-config 依赖
 
