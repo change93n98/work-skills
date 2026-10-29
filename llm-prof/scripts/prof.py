@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from decimal import Decimal, InvalidOperation
 
-from kernel_categories import CATEGORIES, KernelClassifier, add_classification_args
+from kernel_categories import CATEGORIES, KernelClassifier, active_categories, add_classification_args
 from prof_analyze_perfetto import run_perfetto_query
 
 RAW_COLUMNS = ('name', 'record_count', 'total_duration_us', 'avg_duration_us',
@@ -172,8 +172,8 @@ def read_xlsx(path, sheet_name=None):
         wb.close()
 
 
-def classify_rows(rows, classifier):
-    """Preserve raw SQL denominators; six-category relative % excludes runtime markers."""
+def classify_rows(rows, classifier, context_evidence=None):
+    """Preserve raw SQL values; category-relative % excludes runtime markers."""
     if not rows:
         raise ValueError('no kernel rows')
     summary = {c:dict(category=c, kernel_kinds=0, record_count=0, total_duration_us=0.0,
@@ -187,7 +187,7 @@ def classify_rows(rows, classifier):
         if (not isinstance(dur, (int,float)) or not math.isfinite(dur) or dur < 0 or
                 not isinstance(count, (int,float)) or not math.isfinite(count) or count <= 0 or int(count) != count):
             raise ValueError(f"invalid duration/count for {raw['name']}")
-        detail = classifier.classify_detail(raw['name'])
+        detail = (context_evidence or {}).get(raw['name']) or classifier.classify_detail(raw['name'])
         label = detail['category'] or ('非计算/'+raw['name'] if raw['name'] in ('WAIT','SET') else '非计算/排除')
         row = dict(raw, category=label, classification=detail)
         result.append(row)
@@ -210,7 +210,17 @@ def classify_rows(rows, classifier):
         excluded['window_absolute_pct'] = None
     total = sum(r['total_duration_us'] for r in result)
     assert math.isclose(total, busy + excluded['total_duration_us'], abs_tol=1e-8)
-    return result, list(summary.values()), excluded, busy
+    moe = any(row['classification']['semantic_type'].startswith('moe_') or row['classification'].get('context_evidence') for row in result)
+    if moe and classifier.schema_version == 2 and not any(row['category']=='group gemm' for row in result):
+        for row in result:
+            if row['category']!='gemm':continue
+            detail=row['classification']
+            detail['name_rule_confidence']=detail['confidence'];detail['confidence']='unknown'
+            detail['category_candidates']=['gemm','group gemm']
+            detail['ambiguity_reasons']=detail['ambiguity_reasons']+[
+                'MoE helpers are present but no expert GEMM role is confirmed from these aggregated names; use the trace CPU expert API links before moving generic GEMM.']
+    selected_categories = active_categories({row['category'] for row in result},moe=moe)
+    return result, [summary[category] for category in selected_categories], excluded, busy
 
 
 def exporter_runtime(args):
@@ -270,6 +280,7 @@ def main(argv=None):
             raise ValueError('report exists: choose another label/output directory or --overwrite')
         classifier = KernelClassifier(args.kernel_rules,platform=args.platform)
         sql = None
+        context_evidence = None
         if args.mode in ('window','step'):
             source = resolve_trace(args.trace)
             from perfetto.trace_processor import TraceProcessor, TraceProcessorConfig
@@ -290,6 +301,12 @@ def main(argv=None):
                     start_us,end_us=args.start_us,args.end_us
                 raw, metadata, sql = analyze_window(tp,start_us,end_us,categories,args.track_id,args.device_id)
                 if args.mode=='step':metadata['device_step']=evidence
+                from moe_context import MoeContextIndex
+                device_index=index if args.mode=='step' else None
+                context_index=MoeContextIndex(tp,classifier,device_index,categories=categories,device_id=args.device_id,track_ids=args.track_id)
+                context_evidence=context_index.window(raw,classifier,metadata)
+                if context_evidence:metadata['moe_context']={'matched_cpu_op_scopes_in_trace':context_index.scope_count,
+                    'reviewed_symbol_count':len(context_evidence),'basis':'same-trace verified expert API launches'}
             finally:
                 tp.close()
             metadata['stage'] = args.stage
@@ -298,7 +315,7 @@ def main(argv=None):
             if outputs[3] == source:
                 raise ValueError('output must differ from source XLSX')
             raw, metadata = read_xlsx(source,args.sheet)
-        kernels, summary, excluded, busy = classify_rows(raw,classifier)
+        kernels, summary, excluded, busy = classify_rows(raw,classifier,context_evidence)
         if args.mode in ('window','step'):
             # Use full precision durations/window for category percentages, not rounded raw % sums.
             for item in summary+[excluded]:
@@ -311,9 +328,9 @@ def main(argv=None):
             summary=summary, excluded=excluded, busy_total_duration_us=busy,
             raw_total_duration_us=sum(r['total_duration_us'] for r in kernels),
             notes=['Raw first six columns preserve the supplied SQL selection and denominator, including WAIT/SET.',
-                   'Category relative percentage excludes runtime markers. Full duration is used even across window end.',
+                   'Category relative percentage excludes runtime markers; expert group GEMM is separate when observed. Full duration is used even across window end.',
                    'Summed durations may overlap across streams/devices; window percentage is not utilization or bubble.',
-                   'Classification is name-based; evidence/confidence/ambiguity are preserved, not invocation source attribution.'])
+                   'Classification uses name rules and available same-trace expert API links; evidence/confidence/ambiguity are preserved, with no cross-run source guessing.'])
         layout_path=Path(__file__).resolve().parent.parent/'assets/report-layout.json'
         layout_bytes=layout_path.read_bytes()
         report['report_layout']={'version':json.loads(layout_bytes)['version'],

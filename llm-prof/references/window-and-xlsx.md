@@ -41,7 +41,7 @@ python3 scripts/prof.py xlsx --xlsx exported.xlsx --sheet 数据 \
 
 以 `--label` 为前缀：
 
-- `.xlsx`：window 为“分类汇总”和“数据”两页；XLSX 输入保留旧页并追加最新汇总。
+- `.xlsx`：window/step 固定为“分类汇总”“Kernel明细”“选窗依据”三页；dense 六类，已确认专家 group gemm 的 MoE 七类。XLSX 输入保留旧页并追加最新汇总。
 - `.csv`：前六列原始统计、类别、规则、confidence、歧义。
 - `.json`：完整窗口基准、track 范围、规则版本/哈希、证据和候选类别、raw/busy/excluded 总耗时。
 - `.sql`：window 使用的可在 Perfetto UI 直接执行的查询。
@@ -49,6 +49,6 @@ python3 scripts/prof.py xlsx --xlsx exported.xlsx --sheet 数据 \
 
 默认拒绝覆盖已有报告；使用新 label/目录，或明确 `--overwrite`。即使 overwrite 也不允许原地覆盖输入 XLSX。交付前另用 artifact-tool 渲染并查看汇总/明细，不将交互预览的生命周期混入批量导出。
 
-两种分母不可混用：原始相对占比包括所选 SQL 设备类别的全部事件（可含 WAIT/SET），分类相对占比只包括规则允许的六类设备事件。raw_total = busy_total + excluded_total。window/step 模式另以原始逐事件区间计算 `metadata.window_coverage`：同一窗口内合并重叠、裁剪边缘并补入跨入覆盖，空泡=窗口−覆盖；不是直接用窗口减 dur 之和。WAIT/SET覆盖仍保留。仅有聚合XLSX缺少逐事件区间时，不声称能得到精确去重空泡。
+两种分母不可混用：原始相对占比包括所选 SQL 设备类别的全部事件（可含 WAIT/SET），分类相对占比只包括规则允许的六/七类设备事件；group gemm 独立计入分母，不与 gemm 重复。raw_total = busy_total + excluded_total。window/step 模式另以原始逐事件区间计算 `metadata.window_coverage`：同一窗口内合并重叠、裁剪边缘并补入跨入覆盖，空泡=窗口−覆盖；不是直接用窗口减 dur 之和。WAIT/SET覆盖仍保留。仅有聚合XLSX缺少逐事件区间时，不声称能得到精确去重空泡。
 
 原生 API 与时间单位参考：[Perfetto Python API](https://perfetto.dev/docs/analysis/trace-processor-python)、[Perfetto SQL](https://perfetto.dev/docs/analysis/perfetto-sql-getting-started)。

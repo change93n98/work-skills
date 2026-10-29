@@ -312,7 +312,7 @@ $RUN_DIR/
 - 通过 `model_forward` slice划分阶段：自动检测慢/快step分界（最后一个>100ms的gap）
   - Prefill = trace开始 → 第一个快step开始（包含warmup gap）
   - Decode step N = 快step阶段的第N个step（正向索引，默认N=2）
-- 算子分六类：gemm、通信、FlashAttention、Triton、其他elementwise、memcpy/memset
+- dense 算子分原六类：gemm、通信、FlashAttention、Triton、其他elementwise、memcpy/memset；MoE 专家矩阵乘另列 group gemm。旧 JSON 分析器按名字分类，通用符号的专家角色需要 native window/step 调用关联确认。
 - 分类兼容 DCU、NVIDIA 和太初 T100；T100 的 `WAIT` 运行时等待标记不计入 kernel busy time，而计入 bubble/idle
 - 分类规则同时输出 `classification_rule`；`fallback:unknown` 必须通过 audit 脚本检查，不允许静默认为分类正确
 - 明细保留 `semantic_type`、`classification_confidence`、`classification_ambiguity` 和候选类别；“其他elementwise”是兼容桶，不等于全部逐元素。FFN 融合 GEMM 与激活 helper 分开。已由单设备纯矩阵乘实测确认的 TecoBLAS NN/NT fp16 allReduce 归 GEMM；未验证变体仍报告 unknown，不能按 allReduce 字样认定通信。

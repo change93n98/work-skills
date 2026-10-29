@@ -31,30 +31,33 @@ result = classifier.classify_detail(kernel_name)
 
 ## 结构与解释
 
-顶层含 schema_version、version、固定六类 categories、fallback、platforms，以及仅供展示的 compatibility_keywords / exclude_hints。platforms 必须含 common、nv、dcu、teco。
+顶层含 schema_version、version、categories、fallback、platforms，以及仅供展示的 compatibility_keywords / exclude_hints。新版 schema2 的类别契约为 gemm、group gemm、通信 (comm)、FlashAttention (fa)、Triton、其他elementwise、memcpy/memset；平台分组仍须含 common、nv、dcu、teco。加载器兼容 schema1 的原六类覆盖文件，不静默改写用户的旧规则或分类语义。
 
 | 字段 | 含义 |
 | --- | --- |
 | id / reason | 唯一规则 ID / 匹配原因 |
 | priority | 数字越小越先匹配；同值按文件的分组与规则顺序 |
 | patterns | 大小写不敏感的 Python 正则数组，任一命中 |
-| category | 六类兼容桶，null 表示运行时/profiler 排除 |
+| category | schema2 七类中的一类；schema1 保留原六类。null 表示运行时/profiler 排除 |
 | semantic_type | fused_ffn、kv_cache_layout、linear_attention_state_update 等语义细分 |
 | evidence | 审阅过的源码/API/知识库或快照 |
 | confidence | high/medium/low/unknown，证据强度，不是概率 |
 | ambiguity_reasons | 未决语义和命名歧义 |
 | category_candidates | 可选的其他候选桶 |
 | notes | 限制、版本和预期但未观察到的家族 |
+| match_on | 默认 kernel_name；cpu_op 表示 native 专家来源规则，不参与普通核名匹配 |
+| source_categories | cpu_op 规则当前只能声明 [gemm]，并将已确认的调用归 group gemm；其他辅助核不迁移 |
 
-自动分类仍依据名字。evidence 不是当前 invocation 的运行时调用栈证明。错误 JSON、重复 key/ID、非法类别和正则明确失败，不回退旧规则。
+默认分类依据核名；native window/step 还能通过明确的专家 CPU API 及同 trace 发射关联确认通用 GEMM 的角色，见 MoE 参考。静态 evidence 不是当前 invocation 的调用栈证明，逐次确认另记 context_evidence。错误 JSON、重复 key/ID、非法类别和正则明确失败，不回退旧规则。
 
-六类保持 gemm、通信 (comm)、FlashAttention (fa)、Triton、其他elementwise、memcpy/memset。“其他elementwise”是历史兼容桶，包含归约、卷积、采样、cache/layout、DeltaRule，并不代表全部逐元素。GEMV、融合 GEMM+激活/norm、融合双投影 FFN 归 GEMM，但使用相应语义子类型。
+dense 报告保留原六类布局；观察到已确认的 MoE 专家分组矩阵乘时新增 `group gemm` 行，使用七类合计。自动判断来自分类结果，不凭模型名把普通 GEMM 全部迁移。`active_categories` 提供统一顺序，所有统计入口共用；比例分母包含新增类且不能重复计入 gemm。“其他elementwise”仍是包含归约、卷积、采样、cache/layout、DeltaRule 的兼容桶。普通 GEMV、融合 dense/shared FFN GEMM 继续归 gemm。具体模式、源码及未验证家族见 [MoE group GEMM](moe-group-gemm.md)。
 
 fallback:unknown 保留其他桶、confidence=unknown。词法全命中不等于语义全验证。源码明确的厂商例外、通信/内存/attention、明确 GEMM 家族应先于泛 activation/layout；以 JSON priority 为准。
 
 ## 重要例外
 
 - Teco ffn_layer_general_fused_for_small 是双投影 GEMM+激活；ffn_layer_general_activation 是激活 helper。
+- vLLM fused_moe_kernel 是按专家权重执行的矩阵乘；Triton 是实现后端，该核按运算语义归 group gemm。TecoLMK 专家 grouped-batched 矩阵乘同样单列。普通 batched GEMM、attention QK/PV、通用 CUTLASS/BLAS 命名不能仅凭 batch/group 字样迁移。
 - prepare_for_group_gemm 是指针/offset 准备，weight_permute 是布局；moe_reduce 是本地专家结果加权汇总。
 - TecoBLAS NN/NT fp16 gemm_*allReduce 已由单设备、无通信组、无 graph 的 torch.mm/F.linear 实测确认属于小 M/N GEMM 局部归约算法，归 GEMM。单次矩阵乘可只发射这个核，不能把它简单称为前一个 GEMM 的后处理。仅放行已验证变体，其他变体显式 unknown。
 - 精确 WAIT/SET 排除，哪怕 exporter 标为 gpu_memset；tcclStreamWaitFlagKernel 保留通信同步。

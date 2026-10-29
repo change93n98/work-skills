@@ -1,8 +1,9 @@
 {
-  "schema_version": 1,
-  "version": "2026-10-12.3",
+  "schema_version": 2,
+  "version": "2026-10-28.1",
   "categories": [
     "gemm",
+    "group gemm",
     "通信 (comm)",
     "FlashAttention (fa)",
     "Triton",
@@ -96,6 +97,10 @@
       "set_tensor",
       "dma_2d",
       "dma_3d"
+    ],
+    "group gemm": [
+      "fused_moe_kernel",
+      "tecolmk_slave_gemm_grouped_batched"
     ]
   },
   "exclude_hints": [
@@ -336,6 +341,26 @@
         ],
         "confidence": "medium",
         "ambiguity_reasons": []
+      },
+      {
+        "id": "common.moe.expert-group-gemm",
+        "category": "group gemm",
+        "reason": "moe_expert_group_gemm",
+        "priority": 140,
+        "patterns": [
+          "^fused_moe_kernel(?:_gptq_awq)?$"
+        ],
+        "semantic_type": "moe_expert_group_gemm",
+        "evidence": [
+          "vLLM0.29.0:model_executor/layers/fused_moe/fused_moe.py:299,539-563 — per-expert token/weight blocks are multiplied with tl.dot; quantized variant:65,276.",
+          "Installed source SHA256 7072eb06237be9d33dcb0ef7101410f886a6363c98cbee70a014c68b70f639cb; see references/moe-group-gemm.md.",
+          "Operation semantics take precedence over the Triton backend; ordinary batched GEMM and MoE routing helpers are not this rule."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "category_candidates": [
+          "group gemm"
+        ]
       }
     ],
     "nv": [
@@ -487,6 +512,69 @@
         ],
         "confidence": "medium",
         "ambiguity_reasons": []
+      },
+      {
+        "id": "nv.moe.local-sum",
+        "category": "其他elementwise",
+        "reason": "moe_local_sum",
+        "priority": 140,
+        "patterns": [
+          "(?:^|::)moe_sum_vec_kernel(?:<|\\()"
+        ],
+        "semantic_type": "moe_local_sum",
+        "evidence": [
+          "vLLM0.29.0:fused_moe.py:1854-1857 — ops.moe_sum combines local expert outputs.",
+          "Source snapshot hashes in references/moe-group-gemm.md."
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [
+          "Installed vLLM Python helper semantics and exact kernel name verified; this wheel does not include the helper CUDA body."
+        ],
+        "category_candidates": [
+          "其他elementwise"
+        ]
+      },
+      {
+        "id": "nv.moe.token-align",
+        "category": "其他elementwise",
+        "reason": "moe_token_alignment",
+        "priority": 140,
+        "patterns": [
+          "(?:^|::)moe_align_block_size_kernel(?:<|\\()"
+        ],
+        "semantic_type": "moe_token_alignment",
+        "evidence": [
+          "vLLM0.29.0:moe_align_block_size.py:11-45,90 — token/expert alignment for later matrix products.",
+          "Source snapshot hashes in references/moe-group-gemm.md."
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [
+          "Installed vLLM Python helper semantics and exact kernel name verified; this wheel does not include the helper CUDA body."
+        ],
+        "category_candidates": [
+          "其他elementwise"
+        ]
+      },
+      {
+        "id": "nv.moe.token-sort",
+        "category": "其他elementwise",
+        "reason": "moe_token_sort",
+        "priority": 140,
+        "patterns": [
+          "(?:^|::)count_and_sort_expert_tokens_kernel(?:<|\\()"
+        ],
+        "semantic_type": "moe_token_sort",
+        "evidence": [
+          "vLLM0.29.0:moe_align_block_size.py:11-45,90 — token counting/ranking metadata, not matrix arithmetic.",
+          "Source snapshot hashes in references/moe-group-gemm.md."
+        ],
+        "confidence": "medium",
+        "ambiguity_reasons": [
+          "Installed vLLM Python helper semantics and exact kernel name verified; this wheel does not include the helper CUDA body."
+        ],
+        "category_candidates": [
+          "其他elementwise"
+        ]
       }
     ],
     "dcu": [
@@ -1509,6 +1597,50 @@
         ],
         "confidence": "high",
         "ambiguity_reasons": []
+      },
+      {
+        "id": "teco.moe.expert-group-gemm",
+        "category": "group gemm",
+        "reason": "moe_expert_group_gemm",
+        "priority": 140,
+        "patterns": [
+          "\\btecolmk_slave_gemm_grouped_batched(?:_v\\d+)?(?:_weight_[a-z0-9]+)?(?:<|\\()"
+        ],
+        "semantic_type": "moe_expert_group_gemm",
+        "evidence": [
+          "tecovllm:csrc/lmk/group_gemm_v2.cc:4-28,111-127 — expert_stats/expert count drive tecolmkGemmGroupedBatchedExV2; SHA256 0d4c9b4ba09776bad698ee42d2c670cb9d56af9aba7f1e4f0717b72876355247.",
+          "tecovllm:vllm_sdaa/layers/fused_moe/experts/sdaa_moe.py:26-53,275-285,333-343 — routed expert w1/w2 use group_gemm_v2; SHA256 5988cb91762dfa2ccff72d54047f9a1e843413bd019deb27c4d2819fd1d95f85.",
+          "Observed group_gemm kernels use tecolmk_slave_gemm_grouped_batched_v2_weight_half<3,64> and <4,64>. Preparation and shared FFN remain separate."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "category_candidates": [
+          "group gemm"
+        ]
+      },
+      {
+        "id": "teco.moe.context.group-api",
+        "category": "group gemm",
+        "reason": "moe_expert_group_gemm:verified-host-api",
+        "priority": 140,
+        "patterns": [
+          "^(?:_C_sdaa::)?group_gemm(?:_v2)?$"
+        ],
+        "semantic_type": "moe_expert_group_gemm",
+        "evidence": [
+          "tecovllm:csrc/lmk/group_gemm_v2.cc:4-28,111-127 — expert_stats/expert count drive tecolmkGemmGroupedBatchedExV2; SHA256 0d4c9b4ba09776bad698ee42d2c670cb9d56af9aba7f1e4f0717b72876355247.",
+          "tecovllm:vllm_sdaa/layers/fused_moe/experts/sdaa_moe.py:26-53,275-285,333-343 — routed expert w1/w2 use group_gemm_v2; SHA256 5988cb91762dfa2ccff72d54047f9a1e843413bd019deb27c4d2819fd1d95f85.",
+          "Observed group_gemm kernels use tecolmk_slave_gemm_grouped_batched_v2_weight_half<3,64> and <4,64>. Preparation and shared FFN remain separate."
+        ],
+        "confidence": "high",
+        "ambiguity_reasons": [],
+        "category_candidates": [
+          "group gemm"
+        ],
+        "match_on": "cpu_op",
+        "source_categories": [
+          "gemm"
+        ]
       }
     ]
   }

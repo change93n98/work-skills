@@ -32,7 +32,7 @@ vllm_profile_readable 仅修复同次 capture 的 Python 栈 UTF-8，设备名�
 
 当前 clean 容器检查到 94 个 API 调用位置，是预期来源，不是已捕获的 kernel 名字。
 
-- ffnv2、weight_only_linear、unified_linear、group_gemm_v2：GEMM/融合线性；API 的 bias、activation、布局 helper 单独分类。
+- ffnv2、weight_only_linear、unified_linear：gemm/融合线性。group_gemm_v2 的专家 grouped-batched 核自2026-10-28单列 group gemm，见 [MoE复核](moe-group-gemm.md)；API 的 bias、activation、布局 helper 单独分类。
 - moe_routing、moe_reduce：本地路由和专家结果加权汇总；DP token 数量元数据不表示通信，交换由 TCCL/TecoEP 路径承担。
 - DeltaRule、causal_conv1d：线性 attention 状态更新、卷积状态更新；保留非 elementwise 语义。
 - weight_permute、独立 GGML 解量化：布局/解量化，不是量化 GEMM。weight_permute_model_quant 选择 CPU runtime，当前 GGUF fallback 也可在 CPU 执行，不据此预测 decode 设备 kernel。

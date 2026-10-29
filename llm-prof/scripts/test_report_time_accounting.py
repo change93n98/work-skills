@@ -26,6 +26,20 @@ def fixture_report():
                 window_duration_us=100,window_coverage=coverage),kernels=kernels,summary=summary,excluded=excluded,
                 busy_total_duration_us=busy,raw_total_duration_us=60,classification_rules=classifier.get_rule_provenance())
 
+
+def moe_fixture_report():
+    report=fixture_report();classifier=KernelClassifier(platform='teco')
+    raw=[dict(name=name,record_count=1,total_duration_us=dur,avg_duration_us=dur,
+              kernel_relative_pct=dur/80*100,window_absolute_pct=dur) for name,dur in [
+        ('teco_slave_gemm(Args)',40),
+        ('void tecolmk_slave_gemm_grouped_batched_v2_weight_half<3, 64>(GemmGroupBatchArgsV2<64>)',20),
+        ('WAIT',20)]]
+    kernels,summary,excluded,busy=classify_rows(raw,classifier)
+    report.update(kernels=kernels,summary=summary,excluded=excluded,busy_total_duration_us=busy,raw_total_duration_us=80)
+    report['metadata']['window_coverage']=window_coverage([
+        dict(ts=0,dur=40000),dict(ts=30000,dur=20000),dict(ts=40000,dur=20000)],0,100000)
+    return report
+
 @unittest.skipUnless(NODE.is_file() and (MODULES/'@oai/artifact-tool').is_dir(),
                      'artifact-tool bundled runtime not available')
 class TimeAccountingExportTests(unittest.TestCase):
@@ -71,7 +85,7 @@ class TimeAccountingExportTests(unittest.TestCase):
                 widths=[9,32,26,15,15,23,23,20,18,20,15]
                 for i,width in enumerate(widths,1):
                     self.assertEqual(sheet.column_dimensions[openpyxl.utils.get_column_letter(i)].width,width)
-                self.assertEqual(wb['选窗依据']['B9'].value,'llm-prof-classification-v1')
+                self.assertEqual(wb['选窗依据']['B9'].value,'llm-prof-classification-v2')
             finally:wb.close()
 
     def test_multiple_ranks_stay_separate_and_mixed_windows_are_rejected(self):
@@ -125,6 +139,64 @@ class TimeAccountingExportTests(unittest.TestCase):
                 self.assertEqual(after['最新分类汇总']['C17'].value,'n.a.')
                 self.assertEqual(after['最新分类汇总']['A5'].fill.fgColor.rgb,'FF253B58')
             finally:before.close();after.close()
+
+    def test_moe_group_row_denominator_and_overlap_accounting(self):
+        import openpyxl
+        report=moe_fixture_report()
+        with tempfile.TemporaryDirectory() as directory:
+            output=self.export_report(report,Path(directory))
+            w=openpyxl.load_workbook(output,data_only=True)
+            try:
+                s=w['分类汇总'];self.assertEqual(s['C7'].value,'group gemm')
+                self.assertEqual(s['C13'].value,'七类合计');self.assertEqual(s['H5'].value,'七类内占比')
+                for cell,value in [('F6',40),('F7',20),('F13',60),('F14',20),('F15',80),
+                                   ('F16',-20),('F17',60),('F18',40),('F19',100),('H7',1/3),('I7',.2)]:
+                    self.assertAlmostEqual(s[cell].value,value,msg=cell)
+                self.assertEqual(s['A5'].fill.fgColor.rgb,'FF253B58');self.assertEqual(s.freeze_panes,'A6')
+                self.assertEqual(s.tables['CategorySummary'].ref,'A5:K19')
+            finally:w.close()
+
+    def test_moe_multirank_blocks_shift_by_fourteen_rows(self):
+        import openpyxl
+        report=moe_fixture_report()
+        batch=dict(mode='batch',reports=[dict(report,rank=0,label='decode-step2-device'),dict(report,rank=1,label='decode-step2-device')])
+        with tempfile.TemporaryDirectory() as directory:
+            w=openpyxl.load_workbook(self.export_report(batch,Path(directory)),data_only=True)
+            try:
+                s=w['分类汇总']
+                for cell,value in [('F6',40),('F7',20),('F19',100),('F20',40),('F21',20),('F32',40),('F33',100)]:
+                    self.assertAlmostEqual(s[cell].value,value,msg=cell)
+                self.assertEqual(s['C21'].value,'group gemm');self.assertEqual(w['Kernel明细'].max_row,7)
+            finally:w.close()
+
+    def test_old_six_category_xlsx_gains_group_row_without_changing_old_data(self):
+        import openpyxl
+        from kernel_categories import DEFAULT_RULES_PATH,DENSE_CATEGORIES
+        from prof import read_xlsx,RAW_COLUMNS
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);report=moe_fixture_report()
+            artifact=json.loads(DEFAULT_RULES_PATH.read_text(encoding='utf-8'))
+            artifact.update(schema_version=1,categories=list(DENSE_CATEGORIES));artifact['compatibility_keywords'].pop('group gemm')
+            for group,rules in artifact['platforms'].items():artifact['platforms'][group]=[r for r in rules if r['category']!='group gemm']
+            rulefile=root/'old-rules.json';rulefile.write_text(json.dumps(artifact),encoding='utf-8')
+            legacy=KernelClassifier(rulefile,platform='teco')
+            raw=[{key:k[key] for key in RAW_COLUMNS} for k in report['kernels']]
+            report['kernels'],report['summary'],report['excluded'],report['busy_total_duration_us']=classify_rows(raw,legacy)
+            report['classification_rules']=legacy.get_rule_provenance()
+            original=self.export_report(report,root,'original');original_bytes=original.read_bytes()
+            raw,metadata=read_xlsx(original,'Kernel明细');new=KernelClassifier(platform='teco')
+            kernels,summary,excluded,busy=classify_rows(raw,new)
+            updated=self.export_report(dict(mode='xlsx',source=str(original),metadata=metadata,kernels=kernels,
+                summary=summary,excluded=excluded,busy_total_duration_us=busy,classification_rules=new.get_rule_provenance()),root,'updated')
+            self.assertEqual(original.read_bytes(),original_bytes)
+            w=openpyxl.load_workbook(updated,data_only=True)
+            try:
+                self.assertEqual(w['Kernel明细']['G3'].value,'gemm');self.assertEqual(w['Kernel明细']['P3'].value,'group gemm')
+                self.assertEqual(w['分类汇总']['F6'].value,60)
+                s=w['最新分类汇总'];self.assertEqual(s['A7'].value,'group gemm');self.assertEqual(s['C7'].value,20)
+                self.assertEqual(s['A13'].value,'七类合计');self.assertEqual(s['C13'].value,60)
+                self.assertEqual(s['A18'].value,'空泡');self.assertEqual(s['C18'].value,'n.a.')
+            finally:w.close()
 
 
 if __name__=='__main__':unittest.main()

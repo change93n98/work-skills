@@ -168,7 +168,7 @@ class KernelRuleArtifactTests(unittest.TestCase):
 
     def test_malformed_artifact_fields_fail_clearly(self):
         mutations = [
-            ("schema_version", lambda a: a.update(schema_version=2)),
+            ("schema_version", lambda a: a.update(schema_version=99)),
             ("categories", lambda a: a.update(categories=["wrong"])),
             ("compatibility_keywords", lambda a: a.update(compatibility_keywords={})),
             ("platforms", lambda a: a["platforms"].update(unknown=[])),
@@ -178,6 +178,9 @@ class KernelRuleArtifactTests(unittest.TestCase):
             ("patterns", lambda a: a["platforms"]["common"][0].update(patterns=[])),
             ("evidence", lambda a: a["platforms"]["common"][0].update(evidence="not a list")),
             ("confidence", lambda a: a["platforms"]["common"][0].update(confidence="sure")),
+            ("match_on", lambda a: a["platforms"]["common"][0].update(match_on="nearest-time")),
+            ("source_categories", lambda a: a["platforms"]["common"][0].update(match_on="cpu_op",category="group gemm",source_categories="gemm")),
+            ("CPU context rules", lambda a: a["platforms"]["common"][0].update(match_on="cpu_op",category="其他elementwise",source_categories=["gemm"])),
             ("duplicate rule id", lambda a: a["platforms"]["nv"].append(copy.deepcopy(a["platforms"]["common"][0]))),
             ("ambiguity_reasons", lambda a: a["platforms"]["common"][0].update(ambiguity_reasons="maybe")),
         ]

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "llm-prof-classification-v1",
+  "version": "llm-prof-classification-v2",
   "font": "Arial",
   "body_size": 10,
   "title_size": 14,
@@ -17,12 +17,80 @@
   "duration_format": "#,##0.000",
   "ratio_format": "0.00%",
   "raw_pct_format": "0.00",
-  "sheet_names": ["分类汇总", "Kernel明细", "选窗依据"],
+  "sheet_names": [
+    "分类汇总",
+    "Kernel明细",
+    "选窗依据"
+  ],
   "summary_header_row": 5,
   "summary_first_row": 6,
   "summary_rows_per_rank": 13,
-  "summary_widths": [9, 32, 26, 15, 15, 23, 23, 20, 18, 20, 15],
-  "detail_widths": [86, 16, 23, 23, 23, 23, 25, 38, 38, 15, 56, 10, 32, 39, 83],
-  "evidence_widths": [9, 37, 24, 19, 76, 24, 25, 13, 13, 20, 52, 45, 21, 24, 29, 24],
-  "time_rows": ["六类合计", "等待/同步 WAIT/SET", "设备调用合计（加总）", "重叠/边界调整", "设备覆盖时长（去重）", "空泡", "窗口总时间"]
+  "summary_widths": [
+    9,
+    32,
+    26,
+    15,
+    15,
+    23,
+    23,
+    20,
+    18,
+    20,
+    15
+  ],
+  "detail_widths": [
+    86,
+    16,
+    23,
+    23,
+    23,
+    23,
+    25,
+    38,
+    38,
+    15,
+    56,
+    10,
+    32,
+    39,
+    83
+  ],
+  "evidence_widths": [
+    9,
+    37,
+    24,
+    19,
+    76,
+    24,
+    25,
+    13,
+    13,
+    20,
+    52,
+    45,
+    21,
+    24,
+    29,
+    24
+  ],
+  "time_rows": [
+    "六类合计",
+    "等待/同步 WAIT/SET",
+    "设备调用合计（加总）",
+    "重叠/边界调整",
+    "设备覆盖时长（去重）",
+    "空泡",
+    "窗口总时间"
+  ],
+  "category_order": [
+    "gemm",
+    "group gemm",
+    "通信 (comm)",
+    "FlashAttention (fa)",
+    "Triton",
+    "其他elementwise",
+    "memcpy/memset"
+  ],
+  "summary_rows_per_rank_moe": 14,
+  "moe_total_label": "七类合计"
 }

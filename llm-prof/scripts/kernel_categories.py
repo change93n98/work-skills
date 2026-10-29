@@ -18,14 +18,26 @@ from typing import Any, Optional
 
 CATEGORIES = (
     "gemm",
+    "group gemm",
     "通信 (comm)",
     "FlashAttention (fa)",
     "Triton",
     "其他elementwise",
     "memcpy/memset",
 )
+DENSE_CATEGORIES = tuple(category for category in CATEGORIES if category != "group gemm")
 PLATFORMS = ("auto", "nv", "dcu", "teco")
 DEFAULT_RULES_PATH = Path(__file__).resolve().parent.parent / "rules" / "kernel-classification-rules.json"
+
+
+def active_categories(present, *, moe: bool = False) -> tuple[str, ...]:
+    """Keep the dense six-row report; expose expert group GEMM when observed.
+
+    ``present`` contains classified categories, not raw kernel/model names.
+    Verified MoE helpers may expose an empty expert row, but never turn
+    routing or generic batched products into expert arithmetic by themselves.
+    """
+    return CATEGORIES if moe or "group gemm" in present else DENSE_CATEGORIES
 
 
 class RuleConfigurationError(ValueError):
@@ -46,6 +58,8 @@ class _Rule:
     ambiguity_reasons: tuple[str, ...]
     category_candidates: tuple[str, ...]
     notes: Optional[str]
+    match_on: str = "kernel_name"
+    source_categories: tuple[str, ...] = ()
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -124,25 +138,30 @@ class KernelClassifier:
     def _load_artifact(self, artifact: Any) -> None:
         if not isinstance(artifact, dict):
             raise RuleConfigurationError("root must be an object")
-        if type(artifact.get("schema_version")) is not int or artifact["schema_version"] != 1:
-            raise RuleConfigurationError("schema_version must be 1")
+        if type(artifact.get("schema_version")) is not int or artifact["schema_version"] not in (1, 2):
+            raise RuleConfigurationError("schema_version must be 1 (legacy dense) or 2 (group GEMM)")
+        self.schema_version = artifact["schema_version"]
         self.version = _nonempty_string(artifact.get("version"), "version")
-        if artifact.get("categories") != list(CATEGORIES):
-            raise RuleConfigurationError("categories must equal the six supported report categories in their existing order")
+        declared_categories = DENSE_CATEGORIES if self.schema_version == 1 else CATEGORIES
+        if artifact.get("categories") != list(declared_categories):
+            raise RuleConfigurationError("categories must match the declared schema's supported report categories and order")
         keywords = artifact.get("compatibility_keywords")
-        if not isinstance(keywords, dict) or set(keywords) != set(CATEGORIES):
-            raise RuleConfigurationError("compatibility_keywords must contain exactly the six report categories")
+        if not isinstance(keywords, dict) or set(keywords) != set(declared_categories):
+            raise RuleConfigurationError("compatibility_keywords must contain exactly the declared report categories")
         self.compatibility_keywords = {
-            category: _string_list(keywords[category], f"compatibility_keywords.{category}", allow_empty=True)
+            category: _string_list(keywords.get(category, []), f"compatibility_keywords.{category}", allow_empty=True)
             for category in CATEGORIES
         }
         self.exclude_hints = _string_list(artifact.get("exclude_hints"), "exclude_hints", allow_empty=True)
         self.fallback = _validate_detail(artifact.get("fallback"), "fallback", allow_excluded=False)
+        if self.fallback["category"] not in declared_categories:
+            raise RuleConfigurationError("fallback.category is not declared by this schema")
         platforms = artifact.get("platforms")
         expected_groups = {"common", "nv", "dcu", "teco"}
         if not isinstance(platforms, dict) or set(platforms) != expected_groups:
             raise RuleConfigurationError("platforms must contain exactly common, nv, dcu, and teco groups")
         compiled = []
+        context_rules = []
         seen_ids = {self.fallback["id"]}
         # Validate all groups even when a specific platform is selected. A typo
         # must fail consistently instead of remaining hidden until a later run.
@@ -152,6 +171,8 @@ class KernelClassifier:
             for index, value in enumerate(rules):
                 context = f"platforms.{group}[{index}]"
                 detail = _validate_detail(value, context, allow_excluded=True)
+                if detail["category"] is not None and detail["category"] not in declared_categories:
+                    raise RuleConfigurationError(f"{context}.category is not declared by this schema")
                 if detail["id"] in seen_ids:
                     raise RuleConfigurationError(f"duplicate rule id {detail['id']!r} in {context}")
                 seen_ids.add(detail["id"])
@@ -164,6 +185,12 @@ class KernelClassifier:
                         patterns.append((pattern, re.compile(pattern, re.IGNORECASE)))
                     except re.error as exc:
                         raise RuleConfigurationError(f"{context} ({detail['id']}) has invalid regex {pattern!r}: {exc}") from exc
+                match_on = value.get("match_on", "kernel_name")
+                if match_on not in ("kernel_name", "cpu_op"):
+                    raise RuleConfigurationError(f"{context}.match_on must be kernel_name or cpu_op")
+                sources = tuple(_string_list(value.get("source_categories", []), f"{context}.source_categories", allow_empty=True))
+                if match_on == "cpu_op" and (detail['category'] != 'group gemm' or sources != ('gemm',)):
+                    raise RuleConfigurationError(f"{context}: CPU context rules may only promote gemm to group gemm")
                 rule = _Rule(
                     rule_id=detail["id"], platform=group,
                     category=detail["category"], reason=detail["reason"],
@@ -172,10 +199,24 @@ class KernelClassifier:
                     confidence=detail["confidence"], ambiguity_reasons=tuple(detail["ambiguity_reasons"]),
                     category_candidates=tuple(detail["category_candidates"]),
                     notes=detail["notes"],
+                    match_on=match_on, source_categories=sources,
                 )
                 if self.platform == "auto" or group in ("common", self.platform):
-                    compiled.append(rule)
+                    (context_rules if match_on == 'cpu_op' else compiled).append(rule)
         self.rules = tuple(sorted(compiled, key=lambda rule: rule.priority))
+        self.context_rules = tuple(sorted(context_rules, key=lambda rule: rule.priority))
+
+    def classify_host_operation(self, name: str) -> Optional[dict[str, Any]]:
+        """Return an explicit expert API rule, never a host duration to add."""
+        for rule in self.context_rules:
+            for pattern, compiled in rule.patterns:
+                if compiled.search(name):
+                    return dict(category=rule.category, reason=rule.reason, rule_id=rule.rule_id,
+                        rule_platform=rule.platform, semantic_type=rule.semantic_type,
+                        evidence=list(rule.evidence), confidence=rule.confidence,
+                        matched_pattern=pattern, ambiguity_reasons=list(rule.ambiguity_reasons),
+                        category_candidates=list(rule.category_candidates), source_categories=list(rule.source_categories))
+        return None
 
     def classify_detail(self, name: str) -> dict[str, Any]:
         """Return category, rule, matched regex and curated evidence.

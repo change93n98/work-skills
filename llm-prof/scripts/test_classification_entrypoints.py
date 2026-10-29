@@ -110,8 +110,8 @@ class ClassificationCliTests(unittest.TestCase):
             artifact = json.loads(DEFAULT_RULES_PATH.read_text(encoding="utf8"))
             artifact["version"] = "test-cli-override"
             artifact["platforms"]["teco"].insert(0, {
-                "id": "teco.cli.proof", "category": "gemm", "reason": "test:external-json",
-                "priority": -1, "patterns": ["^proof_kernel$"], "semantic_type": "test_gemm",
+                "id": "teco.cli.proof", "category": "group gemm", "reason": "test:external-json",
+                "priority": -1, "patterns": ["^proof_kernel$"], "semantic_type": "test_group_gemm",
                 "confidence": "high", "evidence": ["Synthetic behavioral fixture"],
             })
             rules = root / "rules.json"
@@ -140,9 +140,9 @@ class ClassificationCliTests(unittest.TestCase):
                         "--kernel-rules", str(rules), "--platform", "teco"], capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     report = json.loads((output / "prof_analysis.json").read_text(encoding="utf8"))
-                    self.assertEqual(report["decode"]["gemm"]["total_dur_ms"], .005)
+                    self.assertEqual(report["decode"]["group gemm"]["total_dur_ms"], .005)
                     self.assertEqual(report["classification_rules"]["version"], "test-cli-override")
-                    self.assertEqual(report["decode_detailed"][0]["semantic_type"], "test_gemm")
+                    self.assertEqual(report["decode_detailed"][0]["semantic_type"], "test_group_gemm")
             audit_out = root / "audit.json"
             result = subprocess.run([sys.executable, str(scripts / "audit_kernel_categories.py"), str(trace),
                 "--kernel-rules", str(rules), "--platform", "teco", "--output", str(audit_out)],
@@ -150,7 +150,7 @@ class ClassificationCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             audit = json.loads(audit_out.read_text(encoding="utf8"))
             self.assertEqual(audit["rows"][0]["count"], 3)
-            self.assertEqual(audit["rows"][0]["semantic_type"], "test_gemm")
+            self.assertEqual(audit["rows"][0]["semantic_type"], "test_group_gemm")
             mapping = root / "mapping.json"
             mapping.write_text(trace.read_text(encoding="utf8"), encoding="utf8")
             result = subprocess.run([sys.executable, str(scripts / "prof_graph_analyze.py"),
@@ -161,7 +161,7 @@ class ClassificationCliTests(unittest.TestCase):
             graph = json.loads((root / "graph/graph_analysis.json").read_text(encoding="utf8"))
             self.assertEqual(graph["classification_rules"]["version"], "test-cli-override")
             self.assertEqual(graph["formal_total_duration_us"], 15)
-            self.assertEqual(graph["kernels"][0]["semantic_type"], "test_gemm")
+            self.assertEqual(graph["kernels"][0]["semantic_type"], "test_group_gemm")
 
 
 class PerfettoContractTests(unittest.TestCase):

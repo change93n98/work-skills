@@ -12,14 +12,15 @@
 - `csrc/cache_ops.cc` 和 `csrc/scpp/cache_kernels.scpp`：`reshape_and_cache_flash`/`prefill_cache` 是 KV cache/layout 操作，不是 FlashAttention；在六类兼容输出中归入 `其他elementwise`。
 - `csrc/fused_qk_gemma_norm_mrope.cc` 和 `csrc/scpp/fused_qk_gemma_norm_mrope_kernel.scpp`：`fused_qk_gemma_norm_mrope` 是 norm/rope 融合算子；`gemma` 不能按 `gemm` 子串匹配。
 - `csrc/lmk/fused_norm.cc`、`fused_gdn_gating.cc`、`fused_recurrent_gated_delta_rule_fwd.cc`、`causal_conv1d_fn.cc`：对应 T100 norm、GDN/DeltaRule、causal conv 融合算子，归入 `其他elementwise`。
-- `csrc/lmk/group_gemm.cc`、`group_gemm_v2.cc`、`group_gemm_ffn` 注册：`teco_slave_gemm*`、`GemmWrapArgs`、`slave_gemm*` 是 GEMM；`slave_mm_dequantize*` 是 GEMM/量化矩阵乘路径。
+- `csrc/lmk/group_gemm.cc`、`group_gemm_v2.cc`、`group_gemm_ffn` 注册：按 expert_stats 组织的专家 grouped-batched 矩阵乘自2026-10-28单列 `group gemm`，见 [MoE group GEMM](moe-group-gemm.md)。普通 `teco_slave_gemm*`、`GemmWrapArgs`、`slave_gemm*` 仍是 gemm；量化/共享 FFN 的普通矩阵乘不据此迁移。
 - `vllm_sdaa/distributed/device_communicators/sdaa_communicator.py`、`pytccl.py`、`pytccl_wrapper.py`：T100 跨卡通信通过 TCCL 的 all-reduce/all-gather/reduce-scatter 等原语；`tccl_*` 和明确 collective 名属于通信。
 
 ## T100 规则
 
-| trace 名称/模式 | 六类报告分类 | 依据 |
+| trace 名称/模式 | 报告分类 | 依据 |
 |---|---|---|
 | `teco_slave_gemm*`、`slave_gemm*`、`slave_mm_*`、`GemmWrapArgs` | `gemm` | TecoBLAS/group GEMM/量化矩阵乘 |
+| `tecolmk_slave_gemm_grouped_batched...` 专家家族 | `group gemm` | 专用规则优先于上面的通用GEMM；expert_stats 驱动 group_gemm_v2 的 w1/w2 专家乘法 |
 | 明确 `tccl_*`、`nccl*`、`rccl*` collective、`all_gather`、`reduce_scatter` | `通信 (comm)` | 跨设备通信；BLAS allReduce 例外见下行 |
 | `tecoblas::*gemm_{NN,NT}_Afp16_Bfp16_Cfp16_allReduce(GemmWrapArgs)` | `gemm` / gemm_small_mn_local_reduce | 单设备 torch.mm/F.linear 已复现同名核并通过 CPU 数值校验，无通信组、无 graph；属于小 M/N GEMM 算法 |
 | `teco_slave_flash_attention*`、`fused_block_attention*`、`block_attention*` | `FlashAttention (fa)` | TecoLMK attention API |

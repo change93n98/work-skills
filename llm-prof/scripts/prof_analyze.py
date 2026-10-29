@@ -17,7 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from kernel_categories import (
-    OP_CATEGORIES, add_classification_args, classification_reason, classify_kernel,
+    OP_CATEGORIES, active_categories, add_classification_args, classification_reason, classify_kernel,
     classify_kernel_detail, configure_classifier, get_rule_provenance, should_exclude_kernel,
 )
 
@@ -227,8 +227,11 @@ def analyze_kernels(kernels: list) -> dict:
     """
     stats = defaultdict(lambda: {"total_dur": 0, "count": 0})
 
+    has_moe = False
     for kernel in kernels:
-        category = classify_kernel(kernel["name"])
+        detail = classify_kernel_detail(kernel["name"])
+        category = detail['category']
+        has_moe |= detail['semantic_type'].startswith('moe_')
         if category is None:
             continue
         stats[category]["total_dur"] += kernel["dur"]
@@ -237,7 +240,7 @@ def analyze_kernels(kernels: list) -> dict:
     total_dur = sum(s["total_dur"] for s in stats.values())
     result = {}
 
-    for cat in list(OP_CATEGORIES.keys()) + ["总计"]:
+    for cat in list(active_categories(stats,moe=has_moe)) + ["总计"]:
         if cat in stats:
             s = stats[cat]
             result[cat] = {
@@ -383,6 +386,7 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
     # Category colors for summary sheets
     cat_colors = {
         "gemm": "FFD700",
+        "group gemm": "FFD700",
         "通信 (comm)": "87CEEB",
         "FlashAttention (fa)": "98FB98",
         "Triton": "DDA0DD",
@@ -469,8 +473,7 @@ def save_xlsx(output_dir: str, prefill_detailed: list, decode_detailed: list,
         total_kernel_dur = sum(v["total_dur"] for v in cat_agg.values())
         bubble_dur = phase_duration_us - total_kernel_dur
 
-        order = ["gemm", "通信 (comm)", "FlashAttention (fa)", "Triton",
-                 "其他elementwise", "memcpy/memset"]
+        order = active_categories(cat_agg)
         row = 2
         for cat in order:
             if cat in cat_agg:

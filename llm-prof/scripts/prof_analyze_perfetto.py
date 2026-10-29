@@ -20,7 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from kernel_categories import (
-    OP_CATEGORIES, add_classification_args, classify_kernel,
+    OP_CATEGORIES, active_categories, add_classification_args, classify_kernel, classify_kernel_detail,
     configure_classifier, get_rule_provenance, should_exclude_kernel,
 )
 
@@ -163,8 +163,11 @@ def analyze_kernels(kernels: list) -> dict:
     """Compute statistics per category."""
     stats = defaultdict(lambda: {"total_dur": 0, "count": 0})
 
+    has_moe = False
     for kernel in kernels:
-        cat = classify_kernel(kernel["name"])
+        detail = classify_kernel_detail(kernel["name"])
+        cat = detail['category']
+        has_moe |= detail['semantic_type'].startswith('moe_')
         if cat is None:
             continue
         stats[cat]["total_dur"] += kernel["dur"]
@@ -173,7 +176,7 @@ def analyze_kernels(kernels: list) -> dict:
     total_dur = sum(s["total_dur"] for s in stats.values())
     result = {}
 
-    for cat in list(OP_CATEGORIES.keys()) + ["总计"]:
+    for cat in list(active_categories(stats,moe=has_moe)) + ["总计"]:
         if cat in stats:
             s = stats[cat]
             result[cat] = {
