@@ -26,6 +26,9 @@
 | max_pixels | mm-processor-kwargs 中的图片像素上限 | 409920 |
 
 运行目录用于存放本次运行的所有产出物，便于后续回溯：
+
+以下为采集期间的工作目录结构。采集和服务结束、分析核验完成后，交付副本按 [交付目录整理](window-and-xlsx.md#交付目录整理) 收尾：每组顶层仅原始 trace 与 decode、prefill 两份最新分类表，其余放“分析辅助资料”。不搬移仍被服务使用的日志、脚本或 PID；旧自动阶段报告等额外报告归入辅助目录，只有用户要求的最新分类表放顶层。
+
 ```
 <运行目录>/
 ├── serve.sh            # 服务启动脚本（可独立复用）
@@ -293,7 +296,7 @@ TRACE_FILE=$(find "$RUN_DIR" -name "*.json.gz" -newer "$RUN_DIR/serve_config.txt
 python3 scripts/prof_analyze.py --trace-file "$TRACE_FILE" --output-dir "$RUN_DIR" --verbose
 ```
 
-分析完成后运行目录结构：
+分析器原始输出的工作目录结构（交付前仍需按上述规则整理）：
 ```
 $RUN_DIR/
 ├── serve.sh                   # 服务启动脚本（可独立复用）

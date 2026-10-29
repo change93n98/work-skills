@@ -51,4 +51,27 @@ python3 scripts/prof.py xlsx --xlsx exported.xlsx --sheet 数据 \
 
 两种分母不可混用：原始相对占比包括所选 SQL 设备类别的全部事件（可含 WAIT/SET），分类相对占比只包括规则允许的六/七类设备事件；group gemm 独立计入分母，不与 gemm 重复。raw_total = busy_total + excluded_total。window/step 模式另以原始逐事件区间计算 `metadata.window_coverage`：同一窗口内合并重叠、裁剪边缘并补入跨入覆盖，空泡=窗口−覆盖；不是直接用窗口减 dur 之和。WAIT/SET覆盖仍保留。仅有聚合XLSX缺少逐事件区间时，不声称能得到精确去重空泡。
 
+## 交付目录整理
+
+每组实验、rank 或独立 trace 使用各自的交付目录。请求同时分析 decode 和 prefill 时，最终结构为：
+
+```text
+<本组目录>/
+├── <原始trace>.pt.trace.json.gz
+├── <最新decode分类表>.xlsx
+├── <最新prefill分类表>.xlsx
+└── 分析辅助资料/
+    ├── <分类结果>.json / .csv / .sql / .txt
+    ├── <选窗、多流、重叠、空泡等核验记录>
+    ├── <抓取日志、脚本、配置和来源信息>
+    └── <旧版分类表及其他辅助文件>
+```
+
+- 顶层只保留原始 trace 和两份最新分类表，名称应能区分阶段及所选 step/窗口；“最新”指本次已成功核验的结果，不能仅凭修改时间选表。原始 trace 保持名称和内容不变，格式也可为其他受支持的 trace 格式。
+- 现有 `prof.py` 会把所有产物写到 `--output-dir`，不会自动整理目录。新分析优先将该参数设为 `<本组目录>/分析辅助资料`，完成导出、回读及核验后，只将最新 XLSX 移到本组顶层。直接调用 XLSX 导出器时，可以从辅助目录中的 JSON 读取并指定顶层 XLSX 路径；导出器的输入、输出参数保持兼容。
+- 对已有交付目录，先明确保留的原始 trace 和两份最新表，再把其他普通文件移入辅助目录，包括旧版 XLSX、核验 CSV/JSON、SQL、文本、日志、脚本、配置、额外报告和压缩包。旧表归档保存；用户明确要求删除时才删除。采集、服务或导出仍在使用的脚本、日志、PID 等待任务结束后再整理，不能移动活动运行目录中的文件。
+- 整理前核实绝对路径均在本组交付目录内，不递归处理上级目录或其他组。辅助目录存在同名文件时不覆盖，使用清晰版本后缀或归档子目录；新表成功核验前保留上次有效表。文件占用时另存清晰版本并说明，不能声称整理已完成。移动后核对顶层清单、归档数量及文件哈希，确认没有丢失或改写内容。
+- 只要求 decode、prefill 或一个手选窗口时，顶层只保留原始 trace 与已要求阶段的最新分类表，不额外分析其他窗口。多个 rank/trace 分目录，graph-off 映射 trace 等额外来源材料归入辅助目录并保留有效来源路径；跨组汇总表和总压缩包放在各组目录的共同上级目录。
+- 仅有 XLSX 输入时，交付目录顶层保留本次最新分类表，辅助产物仍放入“分析辅助资料”；原始输入 XLSX 保持原位，不移动或覆盖，不创建不存在的 trace 或另一阶段报告。仅交付 JSON/CSV 的 `--no-xlsx` 任务同样不伪造两份表格。
+
 原生 API 与时间单位参考：[Perfetto Python API](https://perfetto.dev/docs/analysis/trace-processor-python)、[Perfetto SQL](https://perfetto.dev/docs/analysis/perfetto-sql-getting-started)。
