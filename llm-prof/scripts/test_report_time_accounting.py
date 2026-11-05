@@ -169,6 +169,41 @@ class TimeAccountingExportTests(unittest.TestCase):
                 self.assertEqual(s['C21'].value,'group gemm');self.assertEqual(w['Kernel明细'].max_row,7)
             finally:w.close()
 
+    def test_mixed_name_contributions_preserve_sql_and_feed_category_formulas(self):
+        import openpyxl
+        from copy import deepcopy
+        classifier=KernelClassifier(platform='teco')
+        report=fixture_report()
+        raw=[{key:k[key] for key in ('name','record_count','total_duration_us','avg_duration_us',
+             'kernel_relative_pct','window_absolute_pct')} for k in report['kernels']]
+        raw[0].update(record_count=2,avg_duration_us=20)
+        detail=classifier.classify_detail(raw[0]['name'])
+        expert=classifier.classify_host_operation('_C_sdaa::group_gemm_v2')
+        residual=deepcopy(detail);residual['confidence']='unknown'
+        detail['allocations']=[
+            dict(record_count=1,duration_ns=30000,event_ids=[101],classification=expert,window_absolute_pct=30),
+            dict(record_count=1,duration_ns=10000,event_ids=[102],classification=residual,window_absolute_pct=10)]
+        report['kernels'],report['summary'],report['excluded'],report['busy_total_duration_us']=classify_rows(
+            raw,classifier,{raw[0]['name']:detail})
+        with tempfile.TemporaryDirectory() as directory:
+            output=self.export_report(report,Path(directory),'mixed')
+            wb=openpyxl.load_workbook(output,data_only=True)
+            formulas=openpyxl.load_workbook(output)
+            try:
+                summary=wb['分类汇总'];detail_sheet=wb['Kernel明细']
+                self.assertEqual(detail_sheet['A2'].value,raw[0]['name'])
+                self.assertEqual(detail_sheet['B2'].value,2)
+                self.assertEqual(detail_sheet['C2'].value,40)
+                self.assertIn('CategoryContributions',detail_sheet.tables)
+                for cell,value in [('D6',1),('F6',10),('D7',1),('F7',30),
+                                   ('F13',40),('F14',20),('F17',50),('F18',50),('F19',100)]:
+                    self.assertAlmostEqual(summary[cell].value,value,msg=cell)
+                self.assertIn("'Kernel明细'!$C$8:$C$10",formulas['分类汇总']['F7'].value)
+                self.assertEqual(wb.sheetnames,['分类汇总','Kernel明细','选窗依据'])
+                self.assertEqual(summary['A5'].fill.fgColor.rgb,'FF253B58')
+            finally:
+                wb.close();formulas.close()
+
     def test_old_six_category_xlsx_gains_group_row_without_changing_old_data(self):
         import openpyxl
         from kernel_categories import DEFAULT_RULES_PATH,DENSE_CATEGORIES

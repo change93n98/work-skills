@@ -54,9 +54,33 @@ export function createClassificationWorkbook(Workbook,reports,{title}={}){
   detail.getRange(`J2:J${n}`).conditionalFormats.add('containsText',{text:'unknown',format:{fill:LAYOUT.unknown_fill,font:{color:LAYOUT.unknown_text,bold:true}}});
   detail.freezePanes.freezeRows(1);
   detail.tables.add(`A1:O${n}`,true,'KernelDetail').style=LAYOUT.table_style;
+  const hasParts=list.some(r=>r.kernels.some(k=>k.category_parts?.length));
+  const contributions=list.map(r=>r.kernels.flatMap(k=>k.category_parts??[k]));
+  const contributionStart=n+5;
+  if(hasParts){
+    const contributionValues=list.flatMap((r,i)=>contributions[i].map(k=>[
+      ...rawKeys.map(key=>k[key]),k.category,k.classification.rule_id,k.classification.semantic_type,
+      k.classification.confidence,k.classification.ambiguity_reasons.join('; '),
+      r.rank,r.label,`${r.rank}:${r.label}`,sourceName(r)]));
+    const contributionEnd=contributionStart+contributionValues.length-1;
+    detail.getRange(`A${n+3}`).values=[['分类分项（逐次调用来源，分类汇总引用本表；上方保留原SQL聚合）']];
+    detail.getRange(`A${n+3}:O${n+3}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size,bold:true};
+    detail.getRange(`A${contributionStart-1}`).write([
+      [...rawKeys,'类别','分类规则','语义子类','置信度','歧义','rank','窗口','窗口ID','来源trace'],
+      ...contributionValues]);
+    detail.getRange(`A${contributionStart-1}:O${contributionEnd}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size};
+    header(detail,`A${contributionStart-1}:O${contributionStart-1}`);
+    detail.getRange(`B${contributionStart}:B${contributionEnd}`).setNumberFormat(LAYOUT.integer_format);
+    detail.getRange(`C${contributionStart}:D${contributionEnd}`).setNumberFormat(LAYOUT.duration_format);
+    detail.getRange(`E${contributionStart}:F${contributionEnd}`).setNumberFormat(LAYOUT.raw_pct_format);
+    detail.getRange(`J${contributionStart}:J${contributionEnd}`).conditionalFormats.add('containsText',
+      {text:'unknown',format:{fill:LAYOUT.unknown_fill,font:{color:LAYOUT.unknown_text,bold:true}}});
+    detail.tables.add(`A${contributionStart-1}:O${contributionEnd}`,true,'CategoryContributions').style=LAYOUT.table_style;
+  }
   summary.showGridLines=false;
   summary.getRange('A2').values=[[group+' kernel 分类']];
   summary.getRange('A3').values=[['总时间为片选窗口；空泡=窗口−设备事件去重覆盖。分类仍按子表2加总，包含 WAIT/SET。']];
+  if(hasParts)summary.getRange('A3').values=[['分类按子表2下方“分类分项”汇总；上方原SQL聚合保留。空泡=窗口−设备事件去重覆盖。']];
   const ruleVersions=[...new Set(list.map(r=>r.classification_rules.version))].join(', ');
   const platforms=[...new Set(list.map(r=>r.classification_rules.platform))].join(', ');
   summary.getRange('A4').values=[[`规则 ${ruleVersions}，平台 ${platforms}。device 为关联首设备事件选窗，含 WAIT/SET；边界见“选窗依据”。`]];
@@ -66,8 +90,9 @@ export function createClassificationWorkbook(Workbook,reports,{title}={}){
     duration=`'Kernel明细'!$C$2:$C$${n}`,calls=`'Kernel明细'!$B$2:$B$${n}`,confidence=`'Kernel明细'!$J$2:$J$${n}`;
   for(let i=0;i<list.length;i++){
     const report=list[i],start=LAYOUT.summary_first_row+i*rowsPerRank,total=start+categoryCount,excluded=total+1,key=`${report.rank}:${report.label}`;
-    const blockStart=2+list.slice(0,i).reduce((total,r)=>total+r.kernels.length,0);
-    const blockEnd=blockStart+report.kernels.length-1;
+    const blockStart=hasParts?contributionStart+contributions.slice(0,i).reduce((total,rows)=>total+rows.length,0):
+      2+list.slice(0,i).reduce((total,r)=>total+r.kernels.length,0);
+    const blockEnd=blockStart+(hasParts?contributions[i].length:report.kernels.length)-1;
     const scope=`'Kernel明细'!$N$${blockStart}:$N$${blockEnd}`,category=`'Kernel明细'!$G$${blockStart}:$G$${blockEnd}`,
       duration=`'Kernel明细'!$C$${blockStart}:$C$${blockEnd}`,calls=`'Kernel明细'!$B$${blockStart}:$B$${blockEnd}`,
       confidence=`'Kernel明细'!$J$${blockStart}:$J$${blockEnd}`;
@@ -151,6 +176,24 @@ export function createClassificationWorkbook(Workbook,reports,{title}={}){
   const versionRow=metricsHeader+list.length+3;
   audit.getRange(`A${versionRow}:B${versionRow+1}`).values=[['模板版本',LAYOUT.version],['模板SHA256',LAYOUT_SHA256]];
   audit.getRange(`A${versionRow}:B${versionRow+1}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size};
+  const contextVersions=[...new Set(list.flatMap(r=>r.kernels.map(k=>k.classification.context_evidence?.version).filter(Boolean)))];
+  if(contextVersions.length){
+    audit.getRange(`A${versionRow+3}:B${versionRow+3}`).values=[['分类来源版本',contextVersions.join(', ')]];
+    audit.getRange(`A${versionRow+3}:B${versionRow+3}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size};
+  }
+  const conflictRows=list.flatMap(r=>r.kernels.flatMap(k=>(k.classification.context_evidence?.launch_conflicts??[]).map(c=>[
+    r.rank,r.label,c.event_id,c.category,c.category_confidence,c.launch_confidence,c.host_op_scope_id,
+    c.candidate_launches.map(l=>l.id).join(', '),c.candidate_launches.map(l=>l.correlation).join(', '),
+    c.correlation,c.duration_ns/1000,c.original_association_basis])));
+  if(conflictRows.length){
+    const first=versionRow+5,last=first+conflictRows.length;
+    audit.getRange(`A${first}`).write([['rank','窗口','设备事件ID','类别','类别置信度','launch置信度',
+      '专家CPU scope ID','候选launch ID','候选correlation','设备correlation','耗时 (µs)','原始关联冲突'],...conflictRows]);
+    audit.getRange(`A${first}:L${last}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size};
+    audit.getRange(`A${first+1}:L${last}`).format.rowHeight=LAYOUT.body_height;
+    audit.getRange(`K${first+1}:K${last}`).setNumberFormat(LAYOUT.duration_format);
+    header(audit,`A${first}:L${first}`);
+  }
   wb.recalculate();
   return wb;
 }

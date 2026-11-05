@@ -50,6 +50,8 @@ result = classifier.classify_detail(kernel_name)
 
 默认分类依据核名；native window/step 还能通过明确的专家 CPU API 及同 trace 发射关联确认通用 GEMM 的角色，见 MoE 参考。静态 evidence 不是当前 invocation 的调用栈证明，逐次确认另记 context_evidence。错误 JSON、重复 key/ID、非法类别和正则明确失败，不回退旧规则。
 
+native 来源算法另记 `context_evidence.version`。类别与精确 launch 分别使用 category_confidence 和 launch_confidence。冲突候选在同一专家 scope 内达成类别一致时保留 launch_conflicts，分类可确定；同名混用按 event_ids 和实测 duration_ns 生成 allocations/category_parts。原SQL行保持完整，分类汇总累加分项，详见 [MoE 来源处理](moe-group-gemm.md)。
+
 dense 报告保留原六类布局；观察到已确认的 MoE 专家分组矩阵乘时新增 `group gemm` 行，使用七类合计。自动判断来自分类结果，不凭模型名把普通 GEMM 全部迁移。`active_categories` 提供统一顺序，所有统计入口共用；比例分母包含新增类且不能重复计入 gemm。“其他elementwise”仍是包含归约、卷积、采样、cache/layout、DeltaRule 的兼容桶。普通 GEMV、融合 dense/shared FFN GEMM 继续归 gemm。具体模式、源码及未验证家族见 [MoE group GEMM](moe-group-gemm.md)。
 
 fallback:unknown 保留其他桶、confidence=unknown。词法全命中不等于语义全验证。源码明确的厂商例外、通信/内存/attention、明确 GEMM 家族应先于泛 activation/layout；以 JSON priority 为准。

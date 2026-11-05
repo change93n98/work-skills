@@ -191,15 +191,37 @@ def classify_rows(rows, classifier, context_evidence=None):
         label = detail['category'] or ('非计算/'+raw['name'] if raw['name'] in ('WAIT','SET') else '非计算/排除')
         row = dict(raw, category=label, classification=detail)
         result.append(row)
-        bucket = summary[detail['category']] if detail['category'] else excluded
-        bucket['kernel_kinds'] += 1
-        bucket['record_count'] += int(count)
-        bucket['total_duration_us'] += dur
+        allocations = detail.get('allocations')
+        contributions = [row]
+        if allocations:
+            ids = [event_id for part in allocations for event_id in part['event_ids']]
+            if (sum(part['record_count'] for part in allocations) != count or
+                    len(ids) != count or len(set(ids)) != len(ids) or
+                    any(part['record_count'] <= 0 or len(part['event_ids']) != part['record_count'] or part['duration_ns'] < 0
+                        for part in allocations) or
+                    not math.isclose(sum(part['duration_ns'] for part in allocations)/1000,dur,abs_tol=1e-6)):
+                raise ValueError(f"Invalid per-invocation allocations for {raw['name']}")
+            contributions = []
+            for part in allocations:
+                part_duration = part['duration_ns']/1000
+                part_detail = part['classification']
+                contributions.append(dict(name=raw['name'],record_count=part['record_count'],
+                    total_duration_us=part_duration,avg_duration_us=part_duration/part['record_count'],
+                    kernel_relative_pct=None,window_absolute_pct=part.get('window_absolute_pct'),
+                    category=part_detail['category'],classification=part_detail,event_ids=part['event_ids']))
+            row['category_parts'] = contributions
         if all_have_window:
             value = raw['window_absolute_pct']
             if not isinstance(value, (int,float)) or not math.isfinite(value) or value < 0:
                 raise ValueError('invalid window_absolute_pct')
-            bucket['window_absolute_pct'] += value
+        for contribution in contributions:
+            part_detail = contribution['classification']
+            bucket = summary[part_detail['category']] if part_detail['category'] else excluded
+            bucket['kernel_kinds'] += 1
+            bucket['record_count'] += int(contribution['record_count'])
+            bucket['total_duration_us'] += contribution['total_duration_us']
+            if all_have_window:
+                bucket['window_absolute_pct'] += value*contribution['total_duration_us']/dur if dur else value/len(contributions)
     busy = sum(s['total_duration_us'] for s in summary.values())
     for s in summary.values():
         s['kernel_relative_pct'] = s['total_duration_us'] / busy * 100 if busy else None
@@ -209,9 +231,12 @@ def classify_rows(rows, classifier, context_evidence=None):
     if not all_have_window:
         excluded['window_absolute_pct'] = None
     total = sum(r['total_duration_us'] for r in result)
+    for row in result:
+        for part in row.get('category_parts',[]):
+            part['kernel_relative_pct'] = part['total_duration_us']/total*100 if total else 0
     assert math.isclose(total, busy + excluded['total_duration_us'], abs_tol=1e-8)
     moe = any(row['classification']['semantic_type'].startswith('moe_') or row['classification'].get('context_evidence') for row in result)
-    if moe and classifier.schema_version == 2 and not any(row['category']=='group gemm' for row in result):
+    if moe and classifier.schema_version == 2 and not summary['group gemm']['record_count']:
         for row in result:
             if row['category']!='gemm':continue
             detail=row['classification']
@@ -219,7 +244,7 @@ def classify_rows(rows, classifier, context_evidence=None):
             detail['category_candidates']=['gemm','group gemm']
             detail['ambiguity_reasons']=detail['ambiguity_reasons']+[
                 'MoE helpers are present but no expert GEMM role is confirmed from these aggregated names; use the trace CPU expert API links before moving generic GEMM.']
-    selected_categories = active_categories({row['category'] for row in result},moe=moe)
+    selected_categories = active_categories({category for category,s in summary.items() if s['record_count']},moe=moe)
     return result, [summary[category] for category in selected_categories], excluded, busy
 
 
@@ -306,6 +331,7 @@ def main(argv=None):
                 context_index=MoeContextIndex(tp,classifier,device_index,categories=categories,device_id=args.device_id,track_ids=args.track_id)
                 context_evidence=context_index.window(raw,classifier,metadata)
                 if context_evidence:metadata['moe_context']={'matched_cpu_op_scopes_in_trace':context_index.scope_count,
+                    'resolution_version':context_index.resolution_version,
                     'reviewed_symbol_count':len(context_evidence),'basis':'same-trace verified expert API launches'}
             finally:
                 tp.close()
@@ -339,12 +365,13 @@ def main(argv=None):
         report_path=out/(args.label+'.json')
         report_path.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8')
         with (out/(args.label+'.csv')).open('w',encoding='utf-8-sig',newline='') as f:
-            writer=csv.DictWriter(f,fieldnames=RAW_COLUMNS+('category','rule_id','confidence','ambiguity'))
+            writer=csv.DictWriter(f,fieldnames=RAW_COLUMNS+('category','rule_id','confidence','ambiguity','category_parts'))
             writer.writeheader()
             for r in kernels:
                 writer.writerow({**{k:r.get(k) for k in RAW_COLUMNS},'category':r['category'],
                     'rule_id':r['classification']['rule_id'],'confidence':r['classification']['confidence'],
-                    'ambiguity':'; '.join(r['classification']['ambiguity_reasons'])})
+                    'ambiguity':'; '.join(r['classification']['ambiguity_reasons']),
+                    'category_parts':json.dumps(r.get('category_parts',[]),ensure_ascii=False)})
         text=[f"{args.label}: {len(kernels)} kernel names, {sum(r['record_count'] for r in kernels)} calls",
               f"Window: {metadata.get('window_duration_us','unavailable')} us; stage={metadata.get('stage','supplied table')}",
               f"Device kernel sum excluding runtime markers: {busy/1000:.6f} ms"]

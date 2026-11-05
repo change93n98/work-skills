@@ -6,9 +6,17 @@
 
 ## 通用 GEMM 符号的专家来源
 
-T100 prefill 的 `group_gemm_v2` 可能发射 `slave_gemm_m1n32k32_fp16` 等通用名称。不能把这些名字全局改归 group gemm，否则会误伤 dense。同一 kernel 名在所选窗口内的每次调用都确认属于专家 API 时，`moe_context.py` 才把该聚合行迁移；设备 dur、调用次数和原 SQL 六列不变。`classification.context_evidence` 记录确认数、专家 dur 和匹配依据。
+T100 prefill 的 `group_gemm_v2` 可能发射 `slave_gemm_m1n32k32_fp16` 等通用名称。`moe_context.py` 逐次检查这些 GEMM 的同 trace 来源。全部调用均确认属于专家 API 时，按名字聚合的整行归 group gemm。来源算法版本为 `moe-source-attribution-v2`，与核名规则版本分别记录。
 
-同名既用于专家又用于普通路径，或只有部分发射关联时，整行保留原分类并标 unknown、gemm/group gemm 候选及确认数，不猜测拆分。聚合 XLSX 无法恢复逐次关联；MoE helper 存在但专家角色未确认时，七类表可出现0的 group gemm 行，此时通用 GEMM 会标角色歧义，0不能解释成没有专家计算。旧 schema1 覆盖文件继续服从自己的规则。
+flow 与 correlation 发生冲突时，核查两者候选的并集。每个候选必须属于同一次专家 CPU scope、同一原生线程和同一来源规则，且 launch 时间有效、早于设备事件。满足这些条件时，类别可归 group gemm，精确 launch 继续保留歧义；缺少候选来源、候选跨 scope 或类别不同均保持未决。不修改 DeviceStepIndex 的原始关联和严格选窗结果。
+
+同名调用的来源混用或仅部分已确认时，原始 SQL 行保留原值和候选歧义。`classification.allocations` 记录分项调用数、整数 duration_ns 和逐次 event_ids；`category_parts` 是供汇总与导出的实测分项。已确认专家部分归 group gemm，残余调用保留 gemm 的名字分类并标记专家角色 unknown，避免将缺少专家证据解释为普通来源已确认。每次设备事件仅计一次，分项次数和耗时必须与原始行守恒。
+
+有分项时，“Kernel明细”上方的原SQL六列及名字汇总保留，下方同样式的“分类分项”成为表1的唯一统计来源。JSON 保存逐次 event_ids；CSV 附加 category_parts。普通报告沿用原三表和样式。仅有聚合 XLSX 时按已有名字规则分类，不补造逐次来源。旧 schema1 覆盖文件继续服从自己的规则。
+
+类别和精确 launch 的置信度分别记为 category_confidence、launch_confidence。关联冲突记录在 context_evidence.launch_conflicts，含设备事件 ID、候选 launch 及其 correlation、专家 scope ID 和设备 dur。“选窗依据”同时显示这些冲突，类别已确定的事件仍可保留 launch 歧义。
+
+已复核的 T100 4096 多模态例子中，两个设备事件的 flow/correlation 分别指向两个相邻 launch，各候选都落在同一个 group_gemm_v2 scope。两个事件耗时为11.015和21.128µs，可确定专家类别。该例的事件 ID 只用于核验，不写入分类规则。
 
 ## 已验证家族
 
