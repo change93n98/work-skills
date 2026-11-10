@@ -2,9 +2,14 @@
 set -eu
 
 server=${1:?需要诊断服务地址 host:port}
-request_script=${2:?需要本次原生请求脚本}
-shift 2
+warmup_script=${2:?需要本次预热脚本}
+request_script=${3:?需要本次正式请求脚本}
+shift 3
 
+if [[ ! -r "$warmup_script" ]]; then
+  printf '无法读取预热脚本 %s\n' "$warmup_script" >&2
+  exit 2
+fi
 if [[ ! -r "$request_script" ]]; then
   printf '无法读取请求脚本 %s\n' "$request_script" >&2
   exit 2
@@ -21,6 +26,9 @@ stop_profile() {
   fi
   exit "$stop_status"
 }
+
+printf '开始预热\n'
+bash -- "$warmup_script"
 
 printf '开始采集\n'
 curl --noproxy '*' -fsS --connect-timeout 5 -X POST "http://$server/start_profile"
