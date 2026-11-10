@@ -1,5 +1,7 @@
 # Dump size 采集
 
+本步骤只在 T100 上执行，使用太初 SDK 和 LMK 的原生 dump 开关。
+
 ## 准备诊断服务
 
 按第 3 步复制本次模型的普通服务脚本，核对实际版本支持的 dump 开关。普通算子 dump 使用 `TECO_ENABLE_DUMP_INFO`，LMK dump 使用 `TECOLMK_ENV_ENABLE_DUMP_INFO`，按需要开启其中一项或两项。下面以两项都开启为例。`dump_run_dir` 取容器内可写的独立挂载目录，把命令放在原有 `vllm serve` 之前。
