@@ -2,15 +2,15 @@
 
 ## 准备诊断服务
 
-按第 3 步复制本次模型的普通服务脚本，在 `vllm serve` 中加入 profiler 配置，给本次采集分配独立的挂载目录。下面是算子耗时和 shape 的默认配置。已指定参考配置时，按本次目标和镜像支持项调整。
+按第 3 步复制本次模型的普通服务脚本，在 `vllm serve` 中加入 profiler 配置，给本次采集分配独立的挂载目录。默认记录算子耗时、shape、调用栈和内存事件。已指定参考配置时，按本次目标和镜像支持项调整。
 
 ```bash
 --profiler-config '{
   "profiler": "torch",
   "torch_profiler_dir": "/path/to/run/trace",
   "torch_profiler_record_shapes": true,
-  "torch_profiler_with_stack": false,
-  "torch_profiler_with_memory": false,
+  "torch_profiler_with_stack": true,
+  "torch_profiler_with_memory": true,
   "torch_profiler_use_gzip": true
 }'
 ```
