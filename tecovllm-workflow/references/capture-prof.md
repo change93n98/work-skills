@@ -32,12 +32,15 @@
 
 ## 抓取和验收
 
+按 [任务日志](logging.md) 将本次配置、预热、正式请求、采集开关和 trace 核对记入 `07-prof.log`。
+
 确认诊断服务就绪、模型名正确、trace 目录可写。准备两份原生请求脚本，指向同一个诊断实例。预热脚本按目标用例选取有代表性的输入类型、长度、图片尺寸和并发，把参数写在脚本里。预热请求应完整结束，失败时返回非零。客户端预热在采集开始前完成，与 profiler 内部的 `warmup_iterations` 分开。
 
 用 [采集脚本](../assets/capture_prof.sh) 依次执行预热和正式采集。`server` 使用诊断实例的 `host:port`，`warmup_script` 为预热脚本，`request_script` 为正式请求脚本。正式脚本的参数接在其路径后。使用 `bash -n` 检查后执行。
 
 ```bash
-bash "$run_dir/capture_prof.sh" "$server" "$warmup_script" "$request_script"
+bash "$log_step" "$log_dir/07-prof.log" \
+  bash "$run_dir/capture_prof.sh" "$server" "$warmup_script" "$request_script"
 ```
 
 脚本先跑预热。预热成功退出后调用 `POST /start_profile`，待正式请求结束后调用 `POST /stop_profile`。正式请求失败时也会尝试停止采集，并保留失败退出码。预热日志和正式请求日志分别保存。

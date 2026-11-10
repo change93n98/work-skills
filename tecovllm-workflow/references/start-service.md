@@ -37,12 +37,16 @@ H100 使用镜像里的 vLLM 入口。需要显式限制可见卡时，将示例
 
 ## 运行和验收
 
+按 [任务日志](logging.md) 将启动、PID 和就绪检查记录到 `03-service.log`，另保留服务输出。
+
 1. 核对节点、容器状态、实际 Python/vLLM 入口、模型挂载和卡占用。T100 核对 `SDAA_VISIBLE_DEVICES`，H100 核对容器 GPU 映射及 `CUDA_VISIBLE_DEVICES`。确认可见卡与模型并行配置一致。按容器网络模式检查端口，`--network=host` 的容器查宿主端口。确认客户端所在位置能访问计划使用的地址。
 2. 用 `remote-dev` 进入容器，从本次挂载的任务目录启动。前台 `serve.sh` 用下面的方式后台运行，并记录 PID 和日志路径。直接复用已经负责后台运行的脚本时，沿用它的启动方式和日志。
 
    ```bash
-   nohup bash ./serve.sh > ./serve.log 2>&1 < /dev/null &
-   printf 'PID=%s\n' "$!"
+   bash "$log_step" "$log_dir/03-service.log" bash -c '
+     nohup bash ./serve.sh > ./serve.log 2>&1 < /dev/null &
+     printf "PID=%s\n" "$!"
+   '
    ```
 
 3. 查看本次进程和日志，从客户端可访问的位置轮询 `/v1/models`，确认返回预期的模型 ID。需要验证模型能力时，单独发一条符合场景的请求，多模态场景用图文输入。启动失败时保留服务日志和实际退出状态。

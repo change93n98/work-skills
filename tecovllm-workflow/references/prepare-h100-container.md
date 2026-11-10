@@ -1,5 +1,7 @@
 # 准备 H100 容器
 
+按 [任务日志](logging.md) 将镜像检查、容器创建和 GPU/CUDA 验收输出追加到 `02-container.log`。
+
 ## 核对设备和镜像
 
 在目标宿主机按 `remote-dev` 的 NVIDIA 分支检查 Docker、NVIDIA runtime 和 GPU 占用。用 `nvidia-smi` 确认卡型、物理编号和 UUID，按本次任务选择 H100 设备。已有指定容器时，通过 `docker inspect` 核对镜像、GPU 映射、端口和挂载，再做下面的容器验收。

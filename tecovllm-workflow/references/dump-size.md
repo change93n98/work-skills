@@ -2,6 +2,8 @@
 
 本步骤只在 T100 上执行，使用太初 SDK 和 LMK 的原生 dump 开关。
 
+按 [任务日志](logging.md) 将本次配置、采集、去重和结果核对记入 `06-dump-size.log`。
+
 ## 准备诊断服务
 
 按第 3 步复制本次模型的普通服务脚本，核对实际版本支持的 dump 开关。普通算子 dump 使用 `TECO_ENABLE_DUMP_INFO`，LMK dump 使用 `TECOLMK_ENV_ENABLE_DUMP_INFO`，按需要开启其中一项或两项。下面以两项都开启为例。`dump_run_dir` 取容器内可写的独立挂载目录，把命令放在原有 `vllm serve` 之前。
@@ -23,7 +25,8 @@ cd "$dump_run_dir" || exit 1
 3. 使用 [采集脚本](../assets/capture_dump_size.sh) 在正式请求前将 `dump_info` 和 `lmk_dump` 移入 `before_formal`，再建立空目录。`dump_run_dir` 是脚本所在环境可见的绝对路径，两个子目录与 `before_formal` 位于同一挂载内。按正式客户端要求进入工作目录，检查 `bash -n` 后执行，正式脚本参数按需接在其路径后面。
 
    ```bash
-   bash "$run_dir/capture_dump_size.sh" "$dump_run_dir" "$request_script"
+   bash "$log_step" "$log_dir/06-dump-size.log" \
+     bash "$run_dir/capture_dump_size.sh" "$dump_run_dir" "$request_script"
    ```
 
 4. 核对正式请求退出状态、服务请求日志和 `request_start.txt`、`request_end.txt`。等待写入结束，确认目标算子在新目录中生成记录。采集失败时保留已写出的记录与日志，并报告缺失项。

@@ -2,6 +2,8 @@
 
 TecovLLM 主仓库默认走 HTTP。内网 GitLab 的 `git@10.10.30.109:` 来源用命令级 `insteadOf` 转成同项目的 HTTP 地址。先核对 `origin` 和 `.gitmodules`，其他主机或地址格式按实际项目的 HTTP 地址处理。
 
+按 [任务日志](logging.md) 将源码获取、构建、容器创建、换版、安装和验收输出追加到 `02-container.log`。
+
 ## 2A 从源码构建并创建 T100 容器
 
 1. 在目标宿主机选一个新的任务目录，执行克隆。

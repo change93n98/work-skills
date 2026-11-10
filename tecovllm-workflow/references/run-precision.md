@@ -25,10 +25,13 @@ cd "$run_dir" &&
 
 ## 运行与交付
 
+按 [任务日志](logging.md) 将客户端准备、数据集执行和结果核对记入 `05-precision.log`。
+
 将 [精度脚本](../assets/run_precision.sh) 放到本次任务目录 `run_dir`，先用 `bash -n` 核对脚本。进入已激活的评测环境和本次 checkout 的 `lm_infer/unit`。`mode` 从上表选择，`max_seq_len` 取实际模型服务的最大序列长度，`run_dir` 使用绝对路径。
 
 ```bash
-bash "$run_dir/run_precision.sh" "$mode" "$server" "$model" "$max_seq_len" "$run_dir"
+bash "$log_step" "$log_dir/05-precision.log" \
+  bash "$run_dir/run_precision.sh" "$mode" "$server" "$model" "$max_seq_len" "$run_dir"
 ```
 
 提测各数据集依次执行，单项失败时保留日志并继续，脚本最终返回非零。需要后台执行时，用 `remote-dev` 的方式启动整份脚本。`log_eval` 按数据集保存客户端日志，`results` 按数据集保存原生结果。核对每项完成状态、分数、有效样本数及报告路径，并记录客户端 commit、评测环境和服务配置。

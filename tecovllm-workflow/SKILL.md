@@ -11,6 +11,8 @@ description: 在远程 T100 或 H100 节点按平台准备容器、启动 vLLM �
 
 各阶段获取仓库默认使用 HTTP(S) Git 地址，包括 clone、fetch、pull 和子模块。内网 GitLab 凭据通过 Git 的认证渠道传入，仓库 URL 和脚本只写项目地址。
 
+每个实际执行的阶段都按 [任务日志](references/logging.md) 保存命令输出、起止时间、退出码和明细路径。单独调用和失败重试也按同一规则记录。
+
 ## 1. 检查节点
 
 - 用 `remote-dev` 解析 SSH 目标和跳板。登录后核对宿主 `hostname`、Docker 权限和实际 GPU 型号。T100 用 `teco-smi` 检查设备、驱动和占用，H100 用 `nvidia-smi` 并核对 Docker 的 NVIDIA runtime。按本次选定的实际设备走对应分支。

@@ -2,6 +2,8 @@
 
 ## 准备客户端
 
+按 [任务日志](logging.md) 将客户端准备、预热、正式运行和结果核对记入 `04-performance.log`。
+
 使用第 3 步已验收的普通服务，或按 [启动配置检查](start-service.md#按用途选择服务) 核对现有实例。确认服务端实际启动参数里没有 `--profiler-config` 及其等号或点分形式，再执行预热和正式测试。核对服务地址、`served-model-name` 和 tokenizer 路径，确认客户端可访问且服务支持图文请求。服务仅支持文本时，先说明固定图文预热的前置条件。
 
 每次实际执行性能任务前，在客户端可访问的新任务目录 `run_dir` 通过 HTTP 获取 `teco-modeltest` 的 `vllm` 分支最新提交。复用已有 checkout 时，先核对 HTTP 来源、分支和工作区状态，再执行 `git pull --ff-only origin vllm` 并确认 HEAD 与远端分支一致。有本地改动、领先提交或分叉时，在新目录克隆。记录本次实际 commit，整轮预热与正式测试使用同一份源码。
@@ -23,7 +25,8 @@ cd "$run_dir" &&
 
 ```bash
 cd "$run_dir/teco-modeltest/lm_infer/unit" &&
-  bash "$run_dir/warmup_performance.sh" "$server" "$model" "$tokenizer" "$run_dir"
+  bash "$log_step" "$log_dir/04-performance.log" \
+    bash "$run_dir/warmup_performance.sh" "$server" "$model" "$tokenizer" "$run_dir"
 ```
 
 核对退出状态和 `warmup/client.log` 中的原生请求结果。预热成功后从同一目录执行正式客户端脚本，预热失败时保留日志并停在预热阶段。用已有 checkout 时将上面 `cd` 的目录改为本次确认的客户端源码路径。
@@ -33,7 +36,8 @@ cd "$run_dir/teco-modeltest/lm_infer/unit" &&
 使用本 Skill 的模板时，用下面的命令启动正式测试。用户指定的正式脚本沿用其调用方式。
 
 ```bash
-bash "$run_dir/run_performance.sh" "$server" "$model" "$tokenizer" "$run_dir"
+bash "$log_step" "$log_dir/04-performance.log" \
+  bash "$run_dir/run_performance.sh" "$server" "$model" "$tokenizer" "$run_dir"
 ```
 
 正式脚本每组在 `formal` 下保存独立的原生结果和日志。性能和精度共用服务时串行执行。对照测试使用同一套正式请求、固定预热和统计口径。
