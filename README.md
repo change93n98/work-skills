@@ -19,6 +19,7 @@ Claude Code / Codex 自定义 Skills 集合。主体面向 **海光 DCU (ROCm)**
 | [remote-dev](#skill-9-remote-dev---远程开发容器) | 从电脑或远程节点通过 SSH 准备 Docker 容器、派发任务并检查进度与结果（太初 / NVIDIA / 通用兜底） |
 | [simple-test-scripts](simple-test-scripts/SKILL.md) | 直接复用指定入口编写简洁的模型服务端、性能和精度测试脚本，保留已确认的提测基准与环境准备规范 |
 | [ssh-docker](#skill-4-ssh-docker---远程-ssh-docker-工作流) | 通过 SSH + `docker exec` 在远程容器执行编译 / 测试 / profiling，代码本地编辑再同步 |
+| [tecovllm-workflow](tecovllm-workflow/SKILL.md) | 按阶段检查远程 T100 节点、准备容器、启动模型服务、跑性能或精度测试、dump size 和抓 prof |
 | [vllm-phase-profiler](vllm-phase-profiler/SKILL.md) | 在独立诊断副本中标注实际 prefill/decode 阶段、token 数与 Graph 模式，并核验 trace 中的 scope |
 
 其余章节：[安装](#安装) · [项目结构](#项目结构) · [依赖](#依赖) · [许可证](#许可证) · [作者](#作者)
@@ -45,6 +46,7 @@ cp -r remote-dev ~/.claude/skills/
 cp -r reliable-task-execution ~/.codex/skills/
 cp -r codex-remote-setup ~/.codex/skills/
 cp -r simple-test-scripts ~/.codex/skills/
+cp -r tecovllm-workflow ~/.codex/skills/
 cp -r vllm-phase-profiler ~/.codex/skills/
 ```
 
