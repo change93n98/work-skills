@@ -9,7 +9,8 @@
 - 以下外层 SSH 从发起机器连接执行节点，`<别名>` 使用发起机器的 SSH 配置与已有跳板路由。
   Docker 创建、镜像查询、设备探测及宿主挂载路径均属于执行节点，不能用发起节点的信息替代。
 - 容器命名 `<用户名>-<卡型>-dev`（用户名取摸底时的 `whoami`，不要预设）。
-- `-v` 的容器内路径**不要落在 `/mnt` 下**（太初官方文档提醒会影响数据集路径）。
+- 新设的容器内挂载路径**不要放在 `/mnt` 的子目录**（太初官方文档提醒会影响数据集路径）。
+  下方 T100 模板直接挂载宿主已有的顶层 `/mnt`。
 - 容器内执行首选 `bash -ic`，由 `.bashrc` 初始化环境（见 SKILL.md 第 5 节）。
   长命令优先用 heredoc 形态下发，避免 ssh → docker → bash 三层引号嵌套：
 
@@ -63,32 +64,23 @@ ssh <别名> 'docker load < /tmp/<tar名> && docker images | grep -i teco'
 
 导入失败或 md5 对不上 → 把差异报给用户，不要硬装。
 
-### 创建（官方模板，逐卡映射，默认走这个）
+### 创建 T100 容器
+
+默认在目标 T100 节点的宿主机上执行下面的命令。按实际任务核对容器名、镜像 ID 或 tag，以及需要挂载的宿主目录。
 
 ```bash
-ssh <别名> 'DEVS=""; for i in <卡号列表，如 0 1 2 3>; do DEVS="$DEVS --device=/dev/tcaicard$i"; done
-docker run -itd --name=<容器名> --net=host --ipc=host $DEVS \
-  --cap-add SYS_PTRACE --cap-add SYS_ADMIN --shm-size 64g \
-  -v <宿主工作路径>:<容器内路径> <镜像> /bin/bash'
+docker run -dit --name vllm-changhl-sws12935 \
+  -v /data/application/changhl/:/data/application/changhl/ \
+  -v /mnt:/mnt -v /sdata:/sdata -v /nfsdata:/nfsdata \
+  -v /data:/data -v /tecogpfs:/tecogpfs -v /data02:/data02 \
+  -v /boot:/boot -v /mnt2:/mnt2 -v /mnt_qne00:/mnt_qne00 \
+  --privileged --cap-add SYS_PTRACE --cap-add SYS_ADMIN \
+  --workdir=/workspace --pids-limit 409600 --network=host --shm-size=128G \
+  1b11848ea89c /bin/bash
 ```
 
-- `-itd` 后台常驻；`--device=/dev/tcaicardN` 挂载指定 SDAA 设备（SPA）。
-- `--shm-size` 建议 64G 及以上（训练场景 128g）。
-
-**全卡/大量卡场景**可用 transfer 实践模板（多卡训练/大模型微调实测）：
-
-```bash
--e TECO_VISIBLE_DEVICES=all --net=host --ipc=host --privileged=true \
---ulimit memlock=-1 --shm-size=128g
-```
-
-不逐卡映射。取舍：逐卡映射权限面小、能卡级隔离，对比实验默认用；privileged 全通只在
-明确要全部卡时用。
-
-### 卡号映射口径
-
-容器挂了 `tcaicard4~7` 时，容器内 `SDAA_VISIBLE_DEVICES=0` 对应**物理卡 4**。
-对比实验要独占某几张卡时，只映射那几张。
+`--privileged` 让容器访问全部卡。启动模型前核对宿主端口、物理卡占用和容器内的逻辑设备编号，
+用 `SDAA_VISIBLE_DEVICES` 选择本次任务使用的卡。
 
 ### 容器内验证 / conda 环境
 

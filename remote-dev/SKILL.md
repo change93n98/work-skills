@@ -18,7 +18,7 @@ description: 从个人电脑或远程节点通过 SSH 在目标节点准备/复�
 
 分册（按需读，不要一开始全读）：
 
-- 建容器三套模板、镜像匹配与导入、容器内验证细节：`references/create-containers.md`
+- 建容器模板、镜像匹配与容器内验证：`references/create-containers.md`
 - 执行/监控命令集、进度判定表、增量测速、结果读取实例：`references/exec-and-monitor.md`
 - 从一个远程节点给另一个节点派发任务、排查 SSH 路由与执行位置：`references/node-dispatch.md`
 
@@ -129,7 +129,7 @@ ssh <别名> 'df -h <路径>; findmnt -no SOURCE,FSTYPE <路径>; hostname'
   要环境类（"给我个容器/准备开发环境"）→ 按探测结果直接创建：空闲卡 + 与驱动版本匹配的
   现成镜像 + 命名 `<用户名>-<卡型>-dev`，建完汇报用了哪些卡和镜像。推荐不了或参数缺失才提问。
 - 不要动别人的容器（按第 2 节归属判断）；重名冲突就换名。
-- 创建模板见 `references/create-containers.md`（太初 / NVIDIA / 兜底三套）。
+- 创建模板见 `references/create-containers.md`。T100 默认用其中的 `--privileged` 命令让容器访问全部卡，启动任务时通过 `SDAA_VISIBLE_DEVICES` 选卡。
 
 ## 4. 验证容器
 
