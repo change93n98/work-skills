@@ -31,14 +31,14 @@ result = classifier.classify_detail(kernel_name)
 
 ## 结构与解释
 
-顶层含 schema_version、version、categories、fallback、platforms，以及仅供展示的 compatibility_keywords / exclude_hints。新版 schema2 的类别契约为 gemm、group gemm、通信 (comm)、FlashAttention (fa)、Triton、其他elementwise、memcpy/memset；平台分组仍须含 common、nv、dcu、teco。加载器兼容 schema1 的原六类覆盖文件，不静默改写用户的旧规则或分类语义。
+顶层含 schema_version、version、categories、fallback、platforms，以及仅供展示的 compatibility_keywords / exclude_hints。schema3 的类别顺序为 gemm、group gemm、通信 (comm)、FlashAttention (fa)、GDN、Triton、其他elementwise、memcpy/memset。平台分组仍须含 common、nv、dcu、teco。加载器兼容 schema1 的基础六类和 schema2 的七类。
 
 | 字段 | 含义 |
 | --- | --- |
 | id / reason | 唯一规则 ID / 匹配原因 |
 | priority | 数字越小越先匹配；同值按文件的分组与规则顺序 |
 | patterns | 大小写不敏感的 Python 正则数组，任一命中 |
-| category | schema2 七类中的一类；schema1 保留原六类。null 表示运行时/profiler 排除 |
+| category | 所声明 schema 的类别之一，null 表示运行时或 Profiler 排除 |
 | semantic_type | fused_ffn、kv_cache_layout、linear_attention_state_update 等语义细分 |
 | evidence | 审阅过的源码/API/知识库或快照 |
 | confidence | high/medium/low/unknown，证据强度，不是概率 |
@@ -52,7 +52,7 @@ result = classifier.classify_detail(kernel_name)
 
 native 来源算法另记 `context_evidence.version`。类别与精确 launch 分别使用 category_confidence 和 launch_confidence。冲突候选在同一专家 scope 内达成类别一致时保留 launch_conflicts，分类可确定；同名混用按 event_ids 和实测 duration_ns 生成 allocations/category_parts。原SQL行保持完整，分类汇总累加分项，详见 [MoE 来源处理](moe-group-gemm.md)。
 
-dense 报告保留原六类布局；观察到已确认的 MoE 专家分组矩阵乘时新增 `group gemm` 行，使用七类合计。自动判断来自分类结果，不凭模型名把普通 GEMM 全部迁移。`active_categories` 提供统一顺序，所有统计入口共用；比例分母包含新增类且不能重复计入 gemm。“其他elementwise”仍是包含归约、卷积、采样、cache/layout、DeltaRule 的兼容桶。普通 GEMV、融合 dense/shared FFN GEMM 继续归 gemm。具体模式、源码及未验证家族见 [MoE group GEMM](moe-group-gemm.md)。
+报告按实际分类显示基础六类及 `group gemm`、`GDN`。`active_categories` 提供统一顺序。相对占比按当前主类合计计算，来源拆分后的每次调用只计入一个主类。“其他elementwise”仍是包含归约、卷积、采样和 cache/layout 的兼容桶。普通 GEMV 和融合 dense/shared FFN GEMM 继续归 gemm。详见 [MoE group GEMM](moe-group-gemm.md) 和 [GDN 分类](gdn-classification.md)。
 
 fallback:unknown 保留其他桶、confidence=unknown。词法全命中不等于语义全验证。源码明确的厂商例外、通信/内存/attention、明确 GEMM 家族应先于泛 activation/layout；以 JSON priority 为准。
 

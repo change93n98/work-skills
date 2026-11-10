@@ -9,6 +9,28 @@ if(LAYOUT.schema_version!==1)throw new Error('Unsupported report layout schema')
 const rawKeys=['name','record_count','total_duration_us','avg_duration_us','kernel_relative_pct','window_absolute_pct'];
 const sourceName=r=>path.basename(r.source);
 const header=(sheet,range)=>{sheet.getRange(range).format={fill:LAYOUT.header_fill,font:{name:LAYOUT.font,size:LAYOUT.body_size,bold:true,color:LAYOUT.header_text},rowHeight:LAYOUT.header_height,wrapText:true,horizontalAlignment:'center',verticalAlignment:'center'};};
+export const reportCategories=present=>LAYOUT.category_order.filter(category=>
+ !['group gemm','GDN'].includes(category)||present.includes(category));
+export const totalCategoryLabel=count=>['六','七','八'][count-6]+'类合计';
+const gdnOperatorBySubtype=new Map(Object.entries(LAYOUT.gdn_operator_groups)
+ .flatMap(([operator,subtypes])=>subtypes.map(subtype=>[subtype,operator])));
+
+export function gdnOperators(report) {
+ const grouped=new Map();
+ for(const k of report.kernels.flatMap(k=>k.category_parts??[k])){
+  if(k.category!=='GDN')continue;
+  const subtype=k.classification.semantic_type;
+  const label=gdnOperatorBySubtype.get(subtype)??subtype;
+  if(!grouped.has(label))grouped.set(label,{label,calls:0,us:0,names:new Set()});
+  const item=grouped.get(label);
+  item.calls+=k.record_count;
+  item.us+=k.total_duration_us;
+  item.names.add(k.name);
+ }
+ const ordered=[...new Set([...Object.keys(LAYOUT.gdn_operator_groups),...grouped.keys()])];
+ return ordered.filter(label=>grouped.has(label)).map(label=>grouped.get(label));
+}
+
 function normalize(r){
  const match=path.basename(r.source).match(/_rank(\d+)[._]/);
  return {...r,metadata:{...r.metadata,stage:r.metadata.stage??r.stage},rank:r.rank??(match?Number(match[1]):'未指定'),label:r.label??r.metadata.label??(r.metadata.device_step?`${r.metadata.stage??r.stage}-step${r.metadata.step_number??2}-device`:`${r.metadata.stage??r.stage??'selected'}-window`)};
@@ -17,19 +39,28 @@ function boundary(r,side){
  if(r.metadata.device_step)return r.metadata.device_step[side];
  return {annotation:{id:null},first_event:{name:'用户给定时间',category:'',offset_us:side==='start'?r.metadata.start_us:r.metadata.end_us,device:r.metadata.device_id,stream:null,correlation:null,association_basis:'user-time'},boundary_confidence:'caller-provided',unlinked_near_boundary_count:0,later_ambiguous_event_count:0};
 }
-export function createClassificationWorkbook(Workbook,reports,{title}={}){
+export function createClassificationWorkbook(Workbook,reports,{title,rowGroups=[]}={}){
  if(!Array.isArray(reports)||!reports.length)throw new Error('Report needs at least one selected window');
  const list=reports.map(normalize);
- const hasGroupGemm=list.some(r=>r.summary.some(s=>s.category==='group gemm'));
- const categories=LAYOUT.category_order.filter(c=>c!=='group gemm'||hasGroupGemm);
+ const categories=reportCategories(list.flatMap(r=>r.summary.map(s=>s.category)));
  const categoryCount=categories.length,rowsPerRank=categoryCount+LAYOUT.time_rows.length;
- const totalLabel=hasGroupGemm?LAYOUT.moe_total_label:LAYOUT.time_rows[0];
+ const totalLabel=totalCategoryLabel(categoryCount);
+ const gdnIndex=categories.indexOf('GDN');
+ let nextRow=LAYOUT.summary_first_row;
+ const blocks=list.map(report=>{
+  const start=nextRow,operators=gdnOperators(report);
+  nextRow+=rowsPerRank+operators.length;
+  return {start,operators,last:nextRow-1};
+ });
+ const hasOutline=blocks.some(block=>block.operators.length);
+ const summaryLastColumn=hasOutline?'L':'K';
  if(new Set(list.map(r=>r.label)).size!==1)throw new Error('Fixed default layout requires one selected window label, not mixed prefill/decode/steps');
  if(new Set(list.map(r=>String(r.rank))).size!==list.length)throw new Error('Duplicate rank/window block');
  for(const r of list){
-  const names=r.summary.map(s=>s.category),allowed=LAYOUT.category_order.filter(c=>c!=='group gemm'||names.includes(c));
-  if(!r.kernels.length||JSON.stringify(names)!==JSON.stringify(allowed))throw new Error('Expected ordered dense or MoE categories and kernel detail');
-  if(r.kernels.some(k=>k.classification.category==='group gemm')&&!names.includes('group gemm'))throw new Error('Group GEMM is missing from the category summary');
+  const names=r.summary.map(s=>s.category),allowed=reportCategories(names);
+  if(!r.kernels.length||JSON.stringify(names)!==JSON.stringify(allowed))throw new Error('Expected ordered report categories and kernel detail');
+  if(r.kernels.flatMap(k=>k.category_parts??[k]).some(k=>['group gemm','GDN'].includes(k.category)&&!names.includes(k.category)))
+    throw new Error('A classified category is missing from the summary');
   if(!r.metadata.window_coverage)throw new Error('Exact window coverage missing; rerun prof.py against the trace before exporting this native report');
  }
  const group=title??list[0].group??list[0].label;
@@ -58,65 +89,94 @@ export function createClassificationWorkbook(Workbook,reports,{title}={}){
   const contributions=list.map(r=>r.kernels.flatMap(k=>k.category_parts??[k]));
   const contributionStart=n+5;
   if(hasParts){
-    const contributionValues=list.flatMap((r,i)=>contributions[i].map(k=>[
-      ...rawKeys.map(key=>k[key]),k.category,k.classification.rule_id,k.classification.semantic_type,
-      k.classification.confidence,k.classification.ambiguity_reasons.join('; '),
-      r.rank,r.label,`${r.rank}:${r.label}`,sourceName(r)]));
+    const contributionValues=list.flatMap((r,i)=>{
+      const namesByCategory=new Map();
+      return contributions[i].map(k=>{
+        if(!namesByCategory.has(k.category))namesByCategory.set(k.category,new Set());
+        const names=namesByCategory.get(k.category),kind=names.has(k.name)?0:1;
+        names.add(k.name);
+        return [...rawKeys.map(key=>k[key]),k.category,k.classification.rule_id,k.classification.semantic_type,
+          k.classification.confidence,k.classification.ambiguity_reasons.join('; '),
+          r.rank,r.label,`${r.rank}:${r.label}`,sourceName(r),kind];
+      });
+    });
     const contributionEnd=contributionStart+contributionValues.length-1;
     detail.getRange(`A${n+3}`).values=[['分类分项（逐次调用来源，分类汇总引用本表；上方保留原SQL聚合）']];
     detail.getRange(`A${n+3}:O${n+3}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size,bold:true};
     detail.getRange(`A${contributionStart-1}`).write([
-      [...rawKeys,'类别','分类规则','语义子类','置信度','歧义','rank','窗口','窗口ID','来源trace'],
+      [...rawKeys,'类别','分类规则','语义子类','置信度','歧义','rank','窗口','窗口ID','来源trace','类别内核名计数'],
       ...contributionValues]);
-    detail.getRange(`A${contributionStart-1}:O${contributionEnd}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size};
-    header(detail,`A${contributionStart-1}:O${contributionStart-1}`);
+    detail.getRange(`A${contributionStart-1}:P${contributionEnd}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size};
+    header(detail,`A${contributionStart-1}:P${contributionStart-1}`);
+    detail.getRange(`P${contributionStart-1}:P${contributionEnd}`).format.columnWidth=20;
     detail.getRange(`B${contributionStart}:B${contributionEnd}`).setNumberFormat(LAYOUT.integer_format);
     detail.getRange(`C${contributionStart}:D${contributionEnd}`).setNumberFormat(LAYOUT.duration_format);
     detail.getRange(`E${contributionStart}:F${contributionEnd}`).setNumberFormat(LAYOUT.raw_pct_format);
     detail.getRange(`J${contributionStart}:J${contributionEnd}`).conditionalFormats.add('containsText',
       {text:'unknown',format:{fill:LAYOUT.unknown_fill,font:{color:LAYOUT.unknown_text,bold:true}}});
-    detail.tables.add(`A${contributionStart-1}:O${contributionEnd}`,true,'CategoryContributions').style=LAYOUT.table_style;
+    detail.tables.add(`A${contributionStart-1}:P${contributionEnd}`,true,'CategoryContributions').style=LAYOUT.table_style;
   }
   summary.showGridLines=false;
   summary.getRange('A2').values=[[group+' kernel 分类']];
   summary.getRange('A3').values=[['总时间为片选窗口；空泡=窗口−设备事件去重覆盖。分类仍按子表2加总，包含 WAIT/SET。']];
   if(hasParts)summary.getRange('A3').values=[['分类按子表2下方“分类分项”汇总；上方原SQL聚合保留。空泡=窗口−设备事件去重覆盖。']];
+  if(hasOutline)summary.getRange('A3').values=[['点击行号左侧的「+」展开 GDN 算子。空泡等于窗口总时间减去设备事件去重覆盖。']];
+  if(list.some(r=>r.gdn_comparison?.graph_candidates.length)){
+    summary.getRange('A3').values=[['「+」展开已确认的 GDN 算子。图回放的候选见 Kernel明细。空泡等于窗口总时间减去设备事件去重覆盖。']];
+  }
   const ruleVersions=[...new Set(list.map(r=>r.classification_rules.version))].join(', ');
   const platforms=[...new Set(list.map(r=>r.classification_rules.platform))].join(', ');
   summary.getRange('A4').values=[[`规则 ${ruleVersions}，平台 ${platforms}。device 为关联首设备事件选窗，含 WAIT/SET；边界见“选窗依据”。`]];
-  summary.getRange('A5:K5').values=[['rank','窗口','类别/时间项','调用次数','kernel种类','总耗时 (µs)','总耗时 (ms)',hasGroupGemm?'七类内占比':'六类内占比','窗口占比','窗口 (ms)','未知种类']];
-  const rowCount=list.length*rowsPerRank+LAYOUT.summary_header_row;
-  const scope=`'Kernel明细'!$N$2:$N$${n}`,category=`'Kernel明细'!$G$2:$G$${n}`,
-    duration=`'Kernel明细'!$C$2:$C$${n}`,calls=`'Kernel明细'!$B$2:$B$${n}`,confidence=`'Kernel明细'!$J$2:$J$${n}`;
+  const headings=['rank','窗口','类别/时间项','调用次数','kernel种类','总耗时 (µs)','总耗时 (ms)',totalLabel.replace('合计','内占比'),'窗口占比','窗口 (ms)','未知种类'];
+  if(hasOutline)headings.push('GDN 内占比');
+  summary.getRange(`A5:${summaryLastColumn}5`).values=[headings];
+  const rowCount=nextRow-1;
   for(let i=0;i<list.length;i++){
-    const report=list[i],start=LAYOUT.summary_first_row+i*rowsPerRank,total=start+categoryCount,excluded=total+1,key=`${report.rank}:${report.label}`;
+    const report=list[i],{start,operators}=blocks[i];
+    const gdn=start+gdnIndex,total=start+categoryCount+operators.length,excluded=total+1,key=`${report.rank}:${report.label}`;
+    const sumCategories=column=>operators.length?
+      `SUM(${column}${start}:${column}${gdn},${column}${gdn+operators.length+1}:${column}${total-1})`:
+      `SUM(${column}${start}:${column}${total-1})`;
     const blockStart=hasParts?contributionStart+contributions.slice(0,i).reduce((total,rows)=>total+rows.length,0):
       2+list.slice(0,i).reduce((total,r)=>total+r.kernels.length,0);
     const blockEnd=blockStart+(hasParts?contributions[i].length:report.kernels.length)-1;
     const scope=`'Kernel明细'!$N$${blockStart}:$N$${blockEnd}`,category=`'Kernel明细'!$G$${blockStart}:$G$${blockEnd}`,
       duration=`'Kernel明细'!$C$${blockStart}:$C$${blockEnd}`,calls=`'Kernel明细'!$B$${blockStart}:$B$${blockEnd}`,
-      confidence=`'Kernel明细'!$J$${blockStart}:$J$${blockEnd}`;
+      confidence=`'Kernel明细'!$J$${blockStart}:$J$${blockEnd}`,kinds=`'Kernel明细'!$P$${blockStart}:$P$${blockEnd}`;
+    const countKinds=criteria=>hasParts?`SUMIFS(${kinds},${criteria})`:`COUNTIFS(${criteria})`;
     for(let c=0;c<categoryCount+2;c++){
-      const row=start+c,label=c<categoryCount?categories[c]:c===categoryCount?totalLabel:LAYOUT.time_rows[1];
+      const row=start+c+(c>gdnIndex?operators.length:0);
+      const label=c<categoryCount?categories[c]:c===categoryCount?totalLabel:LAYOUT.time_rows[1];
       summary.getRange(`A${row}:C${row}`).values=[[report.rank,report.label,label]];
       summary.getRange(`J${row}`).values=[[report.metadata.window_duration_us/1000]];
       if(c<categoryCount){
         summary.getRange(`D${row}:I${row}`).formulas=[[
           `=SUMIFS(${calls},${scope},"${key}",${category},C${row})`,
-          `=COUNTIFS(${scope},"${key}",${category},C${row})`,
+          `=${countKinds(`${scope},"${key}",${category},C${row}`)}`,
           `=SUMIFS(${duration},${scope},"${key}",${category},C${row})`,
           `=F${row}/1000`,`=IF($F$${total}=0,"n.a.",F${row}/$F$${total})`,`=G${row}/J${row}`]];
         summary.getRange(`K${row}`).formulas=[[`=COUNTIFS(${scope},"${key}",${category},C${row},${confidence},"unknown")`]];
       }else if(c===categoryCount){
-        summary.getRange(`D${row}:I${row}`).formulas=[[`=SUM(D${start}:D${row-1})`,`=SUM(E${start}:E${row-1})`,
-          `=SUM(F${start}:F${row-1})`,`=F${row}/1000`,`=IF(F${row}=0,"n.a.",SUM(H${start}:H${row-1}))`,`=G${row}/J${row}`]];
-        summary.getRange(`K${row}`).formulas=[[`=SUM(K${start}:K${row-1})`]];
+        summary.getRange(`D${row}:I${row}`).formulas=[[`=${sumCategories('D')}`,`=${sumCategories('E')}`,
+          `=${sumCategories('F')}`,`=F${row}/1000`,`=IF(F${row}=0,"n.a.",${sumCategories('H')})`,`=G${row}/J${row}`]];
+        summary.getRange(`K${row}`).formulas=[[`=${sumCategories('K')}`]];
         summary.getRange(`A${row}:K${row}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size,bold:true};
       }else{
         summary.getRange(`D${row}:G${row}`).formulas=[[
-          `=SUMIFS(${calls},${scope},"${key}")-D${total}`,`=COUNTIFS(${scope},"${key}")-E${total}`,
+          `=SUMIFS(${calls},${scope},"${key}")-D${total}`,`=${countKinds(`${scope},"${key}"`)}-E${total}`,
           `=SUMIFS(${duration},${scope},"${key}")-F${total}`,`=F${row}/1000`]];
         summary.getRange(`I${row}`).formulas=[[`=G${row}/J${row}`]];
+      }
+    }
+    if(operators.length){
+      rowGroups.push({parent:gdn,first:gdn+1,last:gdn+operators.length});
+      for(const [offset,item] of operators.entries()){
+        const row=gdn+1+offset;
+        summary.getRange(`C${row}:F${row}`).values=[['　'+item.label,item.calls,item.names.size,item.us]];
+        summary.getRange(`J${row}`).values=[[report.metadata.window_duration_us/1000]];
+        summary.getRange(`G${row}:I${row}`).formulas=[[
+          `=F${row}/1000`,`=IF($F$${total}=0,"n.a.",F${row}/$F$${total})`,`=G${row}/J${row}`]];
+        summary.getRange(`L${row}`).formulas=[[`=IF($F$${gdn}=0,"n.a.",F${row}/$F$${gdn})`]];
       }
     }
     const accounting=excluded+1,metricSource=list.length*2+4+i;
@@ -135,24 +195,33 @@ export function createClassificationWorkbook(Workbook,reports,{title}={}){
     summary.getRange(`F${accounting+3}`).formulas=[[`=F${accounting+4}-F${accounting+2}`]];
     summary.getRange(`F${accounting+4}`).formulas=[[`='选窗依据'!C${metricSource}`]];
   }
-  summary.getRange(`A2:K${rowCount}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size};
+  summary.getRange(`A2:${summaryLastColumn}${rowCount}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size};
   summary.getRange('A2').format.font={name:LAYOUT.font,size:LAYOUT.title_size,bold:true};
   summary.getRange('A3:A4').format.font={name:LAYOUT.font,size:LAYOUT.body_size,color:LAYOUT.note_text,italic:true};
-  header(summary,'A5:K5');
+  header(summary,`A5:${summaryLastColumn}5`);
   const summaryWidths=LAYOUT.summary_widths;
   for(let i=0;i<11;i++)summary.getRangeByIndexes(0,i,rowCount,1).format.columnWidth=summaryWidths[i];
-  summary.getRange(`A6:K${rowCount}`).format.rowHeight=LAYOUT.body_height;
+  summary.getRange(`A6:${summaryLastColumn}${rowCount}`).format.rowHeight=LAYOUT.body_height;
   summary.getRange(`D6:E${rowCount}`).setNumberFormat(LAYOUT.integer_format);
   summary.getRange(`F6:G${rowCount}`).setNumberFormat(LAYOUT.duration_format);
   summary.getRange(`H6:I${rowCount}`).setNumberFormat(LAYOUT.ratio_format);
   summary.getRange(`J6:J${rowCount}`).setNumberFormat(LAYOUT.duration_format);
-  for(let i=0;i<list.length;i++){
-    const start=LAYOUT.summary_first_row+i*rowsPerRank,last=start+rowsPerRank-1;
+  if(hasOutline){
+    summary.getRange(`L5:L${rowCount}`).format.columnWidth=19;
+    summary.getRange(`L6:L${rowCount}`).setNumberFormat(LAYOUT.ratio_format);
+    for(const {first,last} of rowGroups){
+      summary.getRange(`C${first}:C${last}`).format.wrapText=true;
+      summary.getRange(`A${first}:L${last}`).format.rowHeight=LAYOUT.body_height+5;
+    }
+  }
+  for(const {last} of blocks){
     summary.getRange(`A${last-1}:K${last}`).format.font={name:LAYOUT.font,size:LAYOUT.body_size,bold:true};
     summary.getRange(`A${last}:K${last}`).format.borders={top:{style:'thin',color:LAYOUT.total_border}};
   }
   summary.freezePanes.freezeRows(5);
-  summary.tables.add(`A5:K${rowCount}`,true,'CategorySummary').style=LAYOUT.table_style;
+  const summaryTable=summary.tables.add(`A5:${summaryLastColumn}${rowCount}`,true,'CategorySummary');
+  summaryTable.style=LAYOUT.table_style;
+  if(hasOutline)summaryTable.showFilterButton=false;
   const auditRows=list.flatMap(r=>[['开始',boundary(r,'start')],['结束',boundary(r,'end')]].map(([side,b])=>[
     r.rank,r.label,side,b.annotation.id,b.first_event.name,b.first_event.category,Number(b.first_event.offset_us),
     String(b.first_event.device??''),String(b.first_event.stream??''),String(b.first_event.correlation??''),

@@ -23,7 +23,7 @@ description: >
 
 默认每份分类表只导出用户选定的一个时间窗，decode 为 step2。子表1“分类汇总”仅按子表2“Kernel明细/数据”的这份数据汇总，选窗证据放在子表3。支持其他 step 不等于默认导出全部 step：未经要求，不混入全 trace、prefill、其他 decode 或另一个手选窗口。多 rank 仍分开汇总，不跨卡相加。只有用户明确要求多个窗口时才增加相应报告。
 
-当前表格样式已经用户认可，后续新生成分类表固定复用 [分类表模板 v2](references/report-layout.md)：通过 `scripts/export_prof_report.mjs` 调用 `scripts/report_template.mjs`，使用 `assets/report-layout.json` 的列顺序、字体、颜色、列宽、数字格式、条纹表格和冻结行，不临时重新排版。dense 保留原六类和13行时间块；识别到已确认的 MoE 专家分组矩阵乘时，在 gemm 后增加 `group gemm`，使用七类和14行时间块。表1必须保留空泡、设备覆盖和窗口总时间。已有XLSX源表保持原样，新增汇总使用同版配色和精度；缺少逐事件区间时空泡标不可计算。
+分类表固定复用 [分类表模板 v2.1](references/report-layout.md)。用 `scripts/export_prof_report.mjs` 和 `assets/report-layout.json` 保持现有列顺序、配色、精度和冻结行。MoE 的 `group gemm` 放在 gemm 后，`GDN` 放在 FlashAttention 后。Prefill、Decode 和已有 XLSX 重新分类时，只要确认了 GDN，汇总页就在 GDN 主行下方默认折叠算子明细，点击行号左侧「+」展开。已有 XLSX 保留原数据和旧分类。表1保留空泡、设备覆盖和窗口总时间。缺少逐事件区间时，空泡标不可计算。
 
 每组 trace 的默认交付目录顶层只保留原始 trace、最新 decode 分类表和最新 prefill 分类表；其余文件统一放入“分析辅助资料”子目录，包括 JSON/CSV/SQL/TXT、日志、脚本、配置、核验记录和旧版表格。只要求一个阶段时只交付该阶段表，不为凑齐两份而扩大分析范围。生成与归档步骤、同名冲突和 XLSX 输入例外见 [交付目录整理](references/window-and-xlsx.md#交付目录整理)；此规则是 skill 的交付收尾步骤，现有 CLI 不会自动搬移文件。
 
@@ -73,7 +73,8 @@ python3 scripts/prof.py xlsx \
 - 平台用 `--platform nv|dcu|teco|auto`，已知硬件时明确选择；规则统一来自 `rules/kernel-classification-rules.json`，可用 `--kernel-rules <JSON>` 覆盖。记录规则版本、SHA256、平台、输入文件及窗口。
 - 模式3数据页前六列保持用户 SQL：`name, record_count, total_duration_us, avg_duration_us, kernel_relative_pct, window_absolute_pct`。模式2完整保留输入列。边界确定后仍按时间窗统计，不代表其中所有事件都由本步 annotation 调用；JSON记录窗口内不能确认归属本步的事件数。原始 SQL 相对占比包含 WAIT/SET，便于对账。
 - dense 分类保持 GEMM、通信、FlashAttention、Triton、其他elementwise、memcpy/memset。MoE 专家 group/grouped GEMM 单列为 `group gemm`，放在 gemm 后；当前依据覆盖 vLLM 的 `fused_moe_kernel` 和 TecoLMK 专家 grouped-batched 家族，见 [MoE 分类边界与来源](references/moe-group-gemm.md)。按实际核名规则启用该类，不因模型名称、普通 batched GEMM 或 routing helper 推断。MoE 的普通投影和共享 FFN 继续归 gemm，routing/排序/对齐/求和继续归辅助计算。
-- 相对占比以当次全部分类耗时之和为分母，dense 六类、MoE 七类；精确 WAIT/SET 等排除项单列，不进入该分母。`group gemm` 不在 gemm 中重复累计。旧 schema1 六类覆盖文件仍按原规则执行，使用新版默认规则才能获得新增类别。不能直接加总明细已四舍五入的百分比。
+- 相对占比以当次所有主类别耗时之和为分母，精确 WAIT/SET 等排除项单列。`group gemm` 和 `GDN` 各只计入一次。GDN 子项占比以 GDN 合计为分母。旧 schema1、schema2 覆盖文件仍按声明的类别执行。比例按未舍入的耗时计算。
+- `GDN` 区分 Prefill 的卷积、卷积后准备、Chunk 主计算，以及 Decode 的卷积状态更新、门控和递推等子项。融合核整笔计入。通用核须有调用证据，只有 graph replay 关联时保留候选歧义。跨卡对比读取报告 JSON 的 `gdn_comparison`，按逻辑阶段匹配拆分核和融合核。详见 [GDN 分类和跨卡对齐](references/gdn-classification.md)。
 - 明确显示“窗口总时间”和“空泡”。总时间等于片选窗口长度；空泡等于窗口减去设备事件区间并集，包含 WAIT/SET，跨窗口事件裁剪后计入覆盖。分类 dur 仍按子表2加总；有多流重叠时另列“重叠/边界调整”，不能重复扣减。当前空泡指所选设备轨迹未覆盖的时间，等待标记内部时间仍单列。仅有聚合 XLSX 而无逐事件 ts/dur 时不能计算精确去重空泡。
 - 分类默认依据名字。native trace 对通用 GEMM 逐次检查专家 CPU API 来源，再按类别汇总，来源规则仍在同一个 JSON（`match_on=cpu_op`）。flow/correlation 冲突时，所有已记录候选 launch 均属于同一次、同一原生线程的已确认专家 API，才允许确定 group gemm 类别；精确 launch 继续标歧义。记录 category_confidence、launch_confidence、候选 ID 和 scope ID，关联选窗继续使用原有严格边界规则。同名混用时按实测调用分项，已确认专家部分计入 group gemm，来源未确认部分保留 gemm 候选歧义。原SQL六列和按名字聚合行保留，有拆分时在“Kernel明细”下方增加“分类分项”，表1只汇总该分项表。仅有聚合 XLSX 或跨运行映射时不能补造逐次来源。保留 rule ID、semantic_type、confidence、evidence、ambiguity_reasons 和候选类别，详见 [MoE 来源与分项](references/moe-group-gemm.md)。
 - “其他elementwise”是兼容桶，包含归约、布局、卷积、采样等，不能全部描述为逐元素。融合 FFN GEMM 与 activation helper 分开；已实测的 TecoBLAS NN/NT FP16 GEMM allReduce 是 GEMM，未验证变体仍标 unknown。

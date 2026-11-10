@@ -275,6 +275,8 @@ python -m sglang.bench_serving \
 
 ## Step 5: 分析Trace
 
+抓完 trace 后，用户需要当前分类表时，用 `scripts/prof.py step` 或 `scripts/prof.py window` 生成选区表。该入口同时支持 Prefill 和 Decode 的 GDN 调用归因与折叠明细。以下分析器用于用户需要 graph 来源审计或旧的主机阶段报告时。
+
 如果 decode 使用 CUDA/HIP/SDAA graph，且需要 CPU 算子或 Python 来源，读取 [graph 双 trace 流程](graph-source-mapping.md)，使用 `scripts/prof_graph_analyze.py`。先采集 graph-off 建立来源映射，再采集真实 graph-on replay 统计设备耗时；单份 graph-on trace 的 `with_stack` 不能恢复未执行的逐算子 host 调用链。需要确认两次运行的配置、实际 graph 开关、阶段窗口及 rank/设备一致。
 
 ```bash

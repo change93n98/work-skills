@@ -51,6 +51,54 @@ class TimeAccountingExportTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr[-2000:])
         return output
 
+    def test_gdn_breakdown_and_unique_kernel_counts(self):
+        import openpyxl
+        from prof import read_xlsx
+        report = fixture_report()
+        classifier = KernelClassifier(platform='teco')
+        name = 'teco_slave_causal_conv1d_perf(Args)'
+        raw = [dict(report['kernels'][0],name=name,record_count=2),report['kernels'][1]]
+        chunk_names = [f'tecolmk_slave_{suffix}(ChunkGatedDeltaRuleArgs)' for suffix in
+                       ('compute_decay_mask_u_w','compute_v_new_last_state','compute_o')]
+        raw.extend(dict(raw[0], name=kernel, record_count=1, total_duration_us=us, avg_duration_us=us)
+                   for us, kernel in enumerate(chunk_names, 1))
+        detail = classifier.classify_detail(name)
+        detail['allocations'] = [
+            dict(record_count=1,duration_ns=us*1000,event_ids=[i],
+                classification=dict(detail,category='GDN',semantic_type=role))
+            for i,us,role in [(1,15,'gdn_conv'),(2,25,'gdn_conv_update')]
+        ]
+        report['kernels'],report['summary'],report['excluded'],report['busy_total_duration_us'] = classify_rows(
+            raw,classifier,{name:detail})
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.export_report(report,Path(directory))
+            source, _ = read_xlsx(path)
+            self.assertEqual([(row["name"],row["record_count"]) for row in source],
+                             [(name,2),("WAIT",1),*((kernel,1) for kernel in chunk_names)])
+            book = openpyxl.load_workbook(path,data_only=True)
+            try:
+                sheet = book['分类汇总']
+                row = next(i for i in range(6,13) if sheet.cell(i,3).value=='GDN')
+                self.assertEqual([sheet.cell(row,c).value for c in (4,5,6)],[5,4,46])
+                self.assertFalse(sheet.sheet_properties.outlinePr.summaryBelow)
+                self.assertTrue(sheet.row_dimensions[row].collapsed)
+                self.assertFalse(sheet.row_dimensions[row].hidden)
+                parts = list(sheet.iter_rows(min_row=row+1,max_row=row+3,max_col=12,values_only=True))
+                self.assertEqual([(part[2].strip(),*part[3:7]) for part in parts], [
+                    ('causal_conv1d',1,1,15,.015),
+                    ('causal_conv1d_update',1,1,25,.025),
+                    ('chunk_gated_delta_rule_fwd',3,3,6,.006),
+                ])
+                for i in range(row+1,row+4):
+                    self.assertTrue(sheet.row_dimensions[i].hidden)
+                    self.assertEqual(sheet.row_dimensions[i].outlineLevel,1)
+                self.assertFalse(sheet.row_dimensions[row+4].hidden)
+                self.assertAlmostEqual(sum(part[11] for part in parts),1)
+                total = next(r for r in sheet.iter_rows(values_only=True) if r[2]=='七类合计')
+                self.assertEqual(total[3:6],(5,4,46))
+            finally:
+                book.close()
+
     def test_wait_retained_and_every_time_account_matches_source(self):
         import openpyxl
         report=fixture_report()
@@ -85,7 +133,7 @@ class TimeAccountingExportTests(unittest.TestCase):
                 widths=[9,32,26,15,15,23,23,20,18,20,15]
                 for i,width in enumerate(widths,1):
                     self.assertEqual(sheet.column_dimensions[openpyxl.utils.get_column_letter(i)].width,width)
-                self.assertEqual(wb['选窗依据']['B9'].value,'llm-prof-classification-v2')
+                self.assertEqual(wb['选窗依据']['B9'].value,'llm-prof-classification-v2.1')
             finally:wb.close()
 
     def test_multiple_ranks_stay_separate_and_mixed_windows_are_rejected(self):
@@ -139,6 +187,41 @@ class TimeAccountingExportTests(unittest.TestCase):
                 self.assertEqual(after['最新分类汇总']['C17'].value,'n.a.')
                 self.assertEqual(after['最新分类汇总']['A5'].fill.fgColor.rgb,'FF253B58')
             finally:before.close();after.close()
+
+    def test_imported_xlsx_gdn_preserves_old_outline_and_adds_new_one(self):
+        import openpyxl
+        from prof import read_xlsx
+        classifier = KernelClassifier(platform='nv')
+        report = fixture_report()
+        raw = [dict(report['kernels'][0], name='fused_recurrent_gated_delta_rule_packed_decode_kernel'),
+               report['kernels'][1]]
+        report.update(zip(('kernels','summary','excluded','busy_total_duration_us'), classify_rows(raw,classifier)))
+        report['classification_rules'] = classifier.get_rule_provenance()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = self.export_report(report,root,'original')
+            raw, metadata = read_xlsx(original,'Kernel明细')
+            kernels, summary, excluded, busy = classify_rows(raw,classifier)
+            output = self.export_report(dict(mode='xlsx',source=str(original),metadata=metadata,kernels=kernels,
+                summary=summary,excluded=excluded,busy_total_duration_us=busy,
+                classification_rules=classifier.get_rule_provenance()),root,'reclassified')
+            book = openpyxl.load_workbook(output,data_only=True)
+            try:
+                self.assertEqual(book['Kernel明细']['P2'].value,'GDN')
+                original_summary = book['分类汇总']
+                self.assertTrue(original_summary.row_dimensions[9].collapsed)
+                self.assertTrue(original_summary.row_dimensions[10].hidden)
+                sheet = book['最新分类汇总']
+                self.assertEqual(sheet['A9'].value,'GDN')
+                self.assertTrue(sheet.row_dimensions[9].collapsed)
+                self.assertEqual(sheet.row_dimensions[10].outlineLevel,1)
+                self.assertTrue(sheet.row_dimensions[10].hidden)
+                self.assertEqual(sheet['A10'].value.strip(),'Packed QKV、门控与递推融合')
+                self.assertEqual([sheet[f'{col}10'].value for col in 'BCGH'],[1,40,1,1])
+                self.assertEqual(sheet['C14'].value,40)
+                self.assertEqual(sheet['C19'].value,'n.a.')
+            finally:
+                book.close()
 
     def test_moe_group_row_denominator_and_overlap_accounting(self):
         import openpyxl
@@ -212,7 +295,8 @@ class TimeAccountingExportTests(unittest.TestCase):
             root=Path(directory);report=moe_fixture_report()
             artifact=json.loads(DEFAULT_RULES_PATH.read_text(encoding='utf-8'))
             artifact.update(schema_version=1,categories=list(DENSE_CATEGORIES));artifact['compatibility_keywords'].pop('group gemm')
-            for group,rules in artifact['platforms'].items():artifact['platforms'][group]=[r for r in rules if r['category']!='group gemm']
+            artifact['compatibility_keywords'].pop('GDN')
+            for group,rules in artifact['platforms'].items():artifact['platforms'][group]=[r for r in rules if r['category'] not in ('group gemm','GDN')]
             rulefile=root/'old-rules.json';rulefile.write_text(json.dumps(artifact),encoding='utf-8')
             legacy=KernelClassifier(rulefile,platform='teco')
             raw=[{key:k[key] for key in RAW_COLUMNS} for k in report['kernels']]

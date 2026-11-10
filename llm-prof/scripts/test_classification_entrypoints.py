@@ -61,9 +61,9 @@ class SemanticRulesTests(unittest.TestCase):
         cache = classifier.classify_detail("tecolmk_slave_prefill_cache(BlockAttentionLayerArgs)")
         state = classifier.classify_detail("tecolmk_slave_compute_o(ChunkGatedDeltaRuleArgs)")
         self.assertEqual(cache["category"], "其他elementwise")
-        self.assertEqual(state["category"], "其他elementwise")
+        self.assertEqual(state["category"], "GDN")
         self.assertIn("cache", cache["semantic_type"])
-        self.assertIn("linear_attention", state["semantic_type"])
+        self.assertEqual(state["semantic_type"], "gdn_chunk_output")
 
     def test_explicit_gemm_beats_epilogue_names(self):
         for platform, name in (

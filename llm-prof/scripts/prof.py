@@ -12,6 +12,7 @@ import shutil
 import subprocess
 from decimal import Decimal, InvalidOperation
 
+from gdn_comparison import summarize_gdn
 from kernel_categories import CATEGORIES, KernelClassifier, active_categories, add_classification_args
 from prof_analyze_perfetto import run_perfetto_query
 
@@ -156,6 +157,10 @@ def read_xlsx(path, sheet_name=None):
         rows = []
         source_columns, source_row_count = len(headers), 1
         for source_row, values in enumerate(sheet.iter_rows(min_row=2, values_only=True), 2):
+            if (sheet.title == 'Kernel明细' and values and
+                    values[0] == '分类分项（逐次调用来源，分类汇总引用本表；上方保留原SQL聚合）' and
+                    all(value is None for value in values[1:])):
+                break
             source_columns = max(source_columns,len(values))
             source_row_count = source_row
             if all(v is None for v in values):
@@ -214,10 +219,14 @@ def classify_rows(rows, classifier, context_evidence=None):
             value = raw['window_absolute_pct']
             if not isinstance(value, (int,float)) or not math.isfinite(value) or value < 0:
                 raise ValueError('invalid window_absolute_pct')
+        counted_categories = set()
         for contribution in contributions:
             part_detail = contribution['classification']
-            bucket = summary[part_detail['category']] if part_detail['category'] else excluded
-            bucket['kernel_kinds'] += 1
+            category = part_detail['category']
+            bucket = summary[category] if category else excluded
+            if category not in counted_categories:
+                bucket['kernel_kinds'] += 1
+                counted_categories.add(category)
             bucket['record_count'] += int(contribution['record_count'])
             bucket['total_duration_us'] += contribution['total_duration_us']
             if all_have_window:
@@ -236,7 +245,7 @@ def classify_rows(rows, classifier, context_evidence=None):
             part['kernel_relative_pct'] = part['total_duration_us']/total*100 if total else 0
     assert math.isclose(total, busy + excluded['total_duration_us'], abs_tol=1e-8)
     moe = any(row['classification']['semantic_type'].startswith('moe_') or row['classification'].get('context_evidence') for row in result)
-    if moe and classifier.schema_version == 2 and not summary['group gemm']['record_count']:
+    if moe and classifier.schema_version >= 2 and not summary['group gemm']['record_count']:
         for row in result:
             if row['category']!='gemm':continue
             detail=row['classification']
@@ -333,6 +342,10 @@ def main(argv=None):
                 if context_evidence:metadata['moe_context']={'matched_cpu_op_scopes_in_trace':context_index.scope_count,
                     'resolution_version':context_index.resolution_version,
                     'reviewed_symbol_count':len(context_evidence),'basis':'same-trace verified expert API launches'}
+                from gdn_context import gdn_context
+                gdn_evidence = gdn_context(tp, raw, classifier, metadata, context_index.index,
+                    categories=categories, device_id=args.device_id, track_ids=args.track_id)
+                context_evidence.update(gdn_evidence)
             finally:
                 tp.close()
             metadata['stage'] = args.stage
@@ -356,11 +369,15 @@ def main(argv=None):
             notes=['Raw first six columns preserve the supplied SQL selection and denominator, including WAIT/SET.',
                    'Category relative percentage excludes runtime markers; expert group GEMM is separate when observed. Full duration is used even across window end.',
                    'Summed durations may overlap across streams/devices; window percentage is not utilization or bubble.',
-                   'Classification uses name rules and available same-trace expert API links; evidence/confidence/ambiguity are preserved, with no cross-run source guessing.'])
+                   'Classification uses name rules and available same-trace operator links; evidence, confidence and ambiguity are preserved.'])
         layout_path=Path(__file__).resolve().parent.parent/'assets/report-layout.json'
         layout_bytes=layout_path.read_bytes()
-        report['report_layout']={'version':json.loads(layout_bytes)['version'],
+        layout = json.loads(layout_bytes)
+        report['report_layout']={'version':layout['version'],
                                  'sha256':hashlib.sha256(layout_bytes).hexdigest()}
+        gdn_comparison = summarize_gdn(kernels, metadata, layout['gdn_comparison_groups'])
+        if gdn_comparison:
+            report['gdn_comparison'] = gdn_comparison
         out.mkdir(parents=True,exist_ok=True)
         report_path=out/(args.label+'.json')
         report_path.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8')

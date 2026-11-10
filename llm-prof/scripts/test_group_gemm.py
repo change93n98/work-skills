@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kernel_categories import CATEGORIES,DENSE_CATEGORIES,DEFAULT_RULES_PATH,KernelClassifier,active_categories
+from kernel_categories import MOE_CATEGORIES,DENSE_CATEGORIES,DEFAULT_RULES_PATH,KernelClassifier,active_categories
 from prof import classify_rows
 from prof_analyze import analyze_kernels as analyze_json
 from prof_analyze_perfetto import analyze_kernels as analyze_native
@@ -49,7 +49,7 @@ class GroupGemmTests(unittest.TestCase):
         dense=classify_rows([raw('teco_slave_gemm(Args)',40),raw('WAIT',20)],c)
         self.assertEqual(tuple(s['category'] for s in dense[1]),DENSE_CATEGORIES)
         kernels,summary,excluded,busy=classify_rows([raw('teco_slave_gemm(Args)',40),raw(TECO_GROUP,20),raw('WAIT',20)],c)
-        self.assertEqual(tuple(s['category'] for s in summary),CATEGORIES)
+        self.assertEqual(tuple(s['category'] for s in summary),MOE_CATEGORIES)
         self.assertEqual(busy,60);self.assertEqual(excluded['total_duration_us'],20)
         stats={s['category']:s for s in summary}
         self.assertAlmostEqual(stats['gemm']['kernel_relative_pct'],100*40/60)
@@ -61,7 +61,8 @@ class GroupGemmTests(unittest.TestCase):
         artifact=json.loads(DEFAULT_RULES_PATH.read_text(encoding='utf-8'))
         artifact['schema_version']=1;artifact['categories']=list(DENSE_CATEGORIES)
         artifact['compatibility_keywords'].pop('group gemm')
-        for group,rules in artifact['platforms'].items():artifact['platforms'][group]=[r for r in rules if r['category']!='group gemm']
+        artifact['compatibility_keywords'].pop('GDN')
+        for group,rules in artifact['platforms'].items():artifact['platforms'][group]=[r for r in rules if r['category'] not in ('group gemm','GDN')]
         artifact['platforms']['common'].append(dict(id='old.explicit_moe',category='gemm',priority=-1,
             patterns=['^fused_moe_kernel$'],reason='legacy fixture',semantic_type='gemm',evidence=['legacy override'],confidence='high'))
         with tempfile.TemporaryDirectory() as directory:
@@ -73,7 +74,7 @@ class GroupGemmTests(unittest.TestCase):
     def test_moe_helpers_expose_unresolved_roles_without_guessing_expert_time(self):
         c=KernelClassifier(platform='teco')
         kernels,summary,excluded,busy=classify_rows([raw('teco_slave_gemm(Args)',40),raw('local_reduce_fused(Args)',2)],c)
-        self.assertEqual(tuple(s['category'] for s in summary),CATEGORIES)
+        self.assertEqual(tuple(s['category'] for s in summary),MOE_CATEGORIES)
         self.assertEqual(kernels[0]['category'],'gemm');self.assertEqual(kernels[0]['classification']['confidence'],'unknown')
         self.assertEqual(kernels[0]['classification']['category_candidates'],['gemm','group gemm'])
         self.assertEqual(next(s for s in summary if s['category']=='group gemm')['total_duration_us'],0)
@@ -83,7 +84,7 @@ class GroupGemmTests(unittest.TestCase):
         data=[dict(name='teco_slave_gemm(Args)',dur=40),dict(name=TECO_GROUP,dur=20)]
         for analyzer in (analyze_json,analyze_native):
             stats=analyzer(data)
-            self.assertEqual(tuple(stats)[:-1],CATEGORIES)
+            self.assertEqual(tuple(stats)[:-1],MOE_CATEGORIES)
             self.assertEqual(stats['group gemm']['count'],1)
             self.assertAlmostEqual(stats['group gemm']['percentage'],100/3)
             self.assertEqual(stats['总计']['count'],2)

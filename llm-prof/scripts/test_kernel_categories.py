@@ -22,7 +22,7 @@ CASES = {
     "void tecolmk_slave_fused_block_attention_decode_v2<256u, 32u>(BlockAttentionLayerArgs)": "FlashAttention (fa)",
     # T100 non-attention fused ops
     "void tecolmk_slave_fused_norm<2, 1>(FusedNormArgs)": "其他elementwise",
-    "void tecolmk_slave_compute_v_new_last_state<1>(ChunkGatedDeltaRuleArgs)": "其他elementwise",
+    "void tecolmk_slave_compute_v_new_last_state<1>(ChunkGatedDeltaRuleArgs)": "GDN",
     "tecodnn::ual::slave::teco_slave_broadcast_add(tecodnn::ual::ops::BroadcastArgs)": "其他elementwise",
     "tecodnn::ual::slave::teco_slave_no_broadcast_mul(tecodnn::ual::ops::NoBroadcastArgs)": "其他elementwise",
     "tecolmk_slave_prefill_cache(BlockAttentionLayerArgs)": "其他elementwise",

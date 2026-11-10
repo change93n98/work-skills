@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "llm-prof-classification-v2",
+  "version": "llm-prof-classification-v2.1",
   "font": "Arial",
   "body_size": 10,
   "title_size": 14,
@@ -87,10 +87,39 @@
     "group gemm",
     "通信 (comm)",
     "FlashAttention (fa)",
+    "GDN",
     "Triton",
     "其他elementwise",
     "memcpy/memset"
   ],
   "summary_rows_per_rank_moe": 14,
-  "moe_total_label": "七类合计"
+  "moe_total_label": "七类合计",
+  "gdn_operator_groups": {
+    "causal_conv1d": ["gdn_conv"],
+    "causal_conv1d_update": ["gdn_conv_update"],
+    "因果卷积（共享核）": ["gdn_conv_shared"],
+    "rearrange_mixed_qkv": ["gdn_rearrange_qkv"],
+    "fused_gdn_gating": ["gdn_gating"],
+    "Q/K L2 Norm": ["gdn_qk_norm"],
+    "QKV 重排、门控与 Q/K 归一化融合": ["gdn_gating_qk_fused"],
+    "chunk_gated_delta_rule_fwd": ["gdn_chunk_prepare", "gdn_chunk_state", "gdn_chunk_output", "gdn_chunk_prefill", "gdn_chunk_fixup", "gdn_chunk_fwd_internal"],
+    "fused_recurrent_gated_delta_rule_fwd": ["gdn_recurrent"],
+    "门控与递推融合": ["gdn_recurrent_fused"],
+    "Packed QKV、门控与递推融合": ["gdn_recurrent_packed"],
+    "输出门控 RMSNorm": ["gdn_output_norm"],
+    "输出布局": ["gdn_output_layout"],
+    "元数据准备": ["gdn_metadata"],
+    "核心内部辅助计算": ["gdn_aux"],
+    "内部内存搬运": ["gdn_memory"]
+  },
+  "gdn_comparison_groups": {
+    "卷积": ["gdn_conv"],
+    "卷积状态更新": ["gdn_conv_update"],
+    "卷积后准备": ["gdn_rearrange_qkv", "gdn_gating", "gdn_qk_norm", "gdn_gating_qk_fused"],
+    "Chunk 主计算": ["gdn_chunk_prepare", "gdn_chunk_state", "gdn_chunk_output", "gdn_chunk_prefill", "gdn_chunk_fixup", "gdn_chunk_fwd_internal"],
+    "递推主计算": ["gdn_recurrent", "gdn_recurrent_fused", "gdn_recurrent_packed"],
+    "输出门控及布局": ["gdn_output_norm", "gdn_output_layout"],
+    "元数据准备": ["gdn_metadata"],
+    "实现辅助": ["gdn_aux", "gdn_memory"]
+  }
 }

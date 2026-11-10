@@ -21,11 +21,13 @@ CATEGORIES = (
     "group gemm",
     "通信 (comm)",
     "FlashAttention (fa)",
+    "GDN",
     "Triton",
     "其他elementwise",
     "memcpy/memset",
 )
-DENSE_CATEGORIES = tuple(category for category in CATEGORIES if category != "group gemm")
+MOE_CATEGORIES = tuple(category for category in CATEGORIES if category != "GDN")
+DENSE_CATEGORIES = tuple(category for category in MOE_CATEGORIES if category != "group gemm")
 PLATFORMS = ("auto", "nv", "dcu", "teco")
 DEFAULT_RULES_PATH = Path(__file__).resolve().parent.parent / "rules" / "kernel-classification-rules.json"
 
@@ -37,7 +39,8 @@ def active_categories(present, *, moe: bool = False) -> tuple[str, ...]:
     Verified MoE helpers may expose an empty expert row, but never turn
     routing or generic batched products into expert arithmetic by themselves.
     """
-    return CATEGORIES if moe or "group gemm" in present else DENSE_CATEGORIES
+    base = MOE_CATEGORIES if moe or "group gemm" in present else DENSE_CATEGORIES
+    return tuple(category for category in CATEGORIES if category in base or category == "GDN" and category in present)
 
 
 class RuleConfigurationError(ValueError):
@@ -138,11 +141,12 @@ class KernelClassifier:
     def _load_artifact(self, artifact: Any) -> None:
         if not isinstance(artifact, dict):
             raise RuleConfigurationError("root must be an object")
-        if type(artifact.get("schema_version")) is not int or artifact["schema_version"] not in (1, 2):
-            raise RuleConfigurationError("schema_version must be 1 (legacy dense) or 2 (group GEMM)")
+        categories_by_schema = {1: DENSE_CATEGORIES, 2: MOE_CATEGORIES, 3: CATEGORIES}
+        if type(artifact.get("schema_version")) is not int or artifact["schema_version"] not in categories_by_schema:
+            raise RuleConfigurationError("schema_version must be 1 (dense), 2 (group GEMM), or 3 (GDN)")
         self.schema_version = artifact["schema_version"]
         self.version = _nonempty_string(artifact.get("version"), "version")
-        declared_categories = DENSE_CATEGORIES if self.schema_version == 1 else CATEGORIES
+        declared_categories = categories_by_schema[self.schema_version]
         if artifact.get("categories") != list(declared_categories):
             raise RuleConfigurationError("categories must match the declared schema's supported report categories and order")
         keywords = artifact.get("compatibility_keywords")

@@ -1,11 +1,12 @@
 {
-  "schema_version": 2,
-  "version": "2026-10-28.1",
+  "schema_version": 3,
+  "version": "2026-11-10.2",
   "categories": [
     "gemm",
     "group gemm",
     "通信 (comm)",
     "FlashAttention (fa)",
+    "GDN",
     "Triton",
     "其他elementwise",
     "memcpy/memset"
@@ -70,6 +71,12 @@
       "fused_block_attention",
       "block_attention",
       "teco_slave_flash_attention"
+    ],
+    "GDN": [
+      "ChunkGatedDeltaRuleArgs",
+      "FusedRecurrentGatedDeltaRuleArgs",
+      "CPDeltaRule",
+      "fused_gdn_gating"
     ],
     "Triton": [
       "triton"
@@ -364,6 +371,66 @@
       }
     ],
     "nv": [
+      {
+        "id": "nv.gdn.flashinfer_chunk_precompute",
+        "category": "GDN",
+        "reason": "gdn:flashinfer-chunk-precompute",
+        "priority": 145,
+        "patterns": ["^kernel_cutlass_kernel_flashinfergdn_kernelsdelta_rule_dsl.*CPDeltaRule(?:T|MN)PrecomputeSm90_"],
+        "semantic_type": "gdn_chunk_prepare",
+        "evidence": ["Qwen3.6 H100 trace and installed FlashInfer GDN entry, CPDeltaRule T/MN precompute stages."],
+        "confidence": "high"
+      },
+      {
+        "id": "nv.gdn.flashinfer_chunk_prefill",
+        "category": "GDN",
+        "reason": "gdn:flashinfer-chunk-prefill",
+        "priority": 145,
+        "patterns": ["^kernel_cutlass_kernel_flashinfergdn_kernelsdelta_rule_dsl.*CPDeltaRulePrefillSm90_"],
+        "semantic_type": "gdn_chunk_prefill",
+        "evidence": ["Qwen3.6 H100 trace and installed FlashInfer GDN entry, CPDeltaRule Prefill stage."],
+        "confidence": "high"
+      },
+      {
+        "id": "nv.gdn.flashinfer_chunk_fixup",
+        "category": "GDN",
+        "reason": "gdn:flashinfer-chunk-fixup",
+        "priority": 145,
+        "patterns": ["^kernel_cutlass_kernel_flashinfergdn_kernelsdelta_rule_dsl.*CPDeltaRuleFixupSimtSm90_"],
+        "semantic_type": "gdn_chunk_fixup",
+        "evidence": ["Qwen3.6 H100 trace and installed FlashInfer GDN entry, CPDeltaRule FixupSimt stage."],
+        "confidence": "high"
+      },
+      {
+        "id": "nv.gdn.recurrent_fused",
+        "category": "GDN",
+        "reason": "gdn:recurrent-fused",
+        "priority": 145,
+        "patterns": ["^fused_sigmoid_gating_delta_rule_update_kernel$"],
+        "semantic_type": "gdn_recurrent_fused",
+        "evidence": ["Installed vLLM fused sigmoid gating and recurrent gated DeltaRule implementation."],
+        "confidence": "high"
+      },
+      {
+        "id": "nv.gdn.recurrent_packed",
+        "category": "GDN",
+        "reason": "gdn:recurrent-packed-decode",
+        "priority": 145,
+        "patterns": ["^fused_recurrent_gated_delta_rule_packed_decode_kernel$"],
+        "semantic_type": "gdn_recurrent_packed",
+        "evidence": ["vLLM FLA fused_recurrent.py: packed decode reads mixed_qkv, computes gating, and updates recurrent state in one kernel."],
+        "confidence": "high"
+      },
+      {
+        "id": "nv.gdn.gating",
+        "category": "GDN",
+        "reason": "gdn:standalone-gating",
+        "priority": 145,
+        "patterns": ["^fused_gdn_gating_kernel$"],
+        "semantic_type": "gdn_gating",
+        "evidence": ["vLLM Qwen GDN fused_gdn_gating computes g and beta without the recurrent state update."],
+        "confidence": "high"
+      },
       {
         "id": "nv.collective.library",
         "category": "通信 (comm)",
@@ -685,6 +752,16 @@
     ],
     "teco": [
       {
+        "id": "teco.gdn.graph_metadata",
+        "category": "GDN",
+        "reason": "gdn:graph-metadata",
+        "priority": 145,
+        "patterns": ["\\bgdn_prepare_cudagraph_impl\\(gdn_prepare_cudagraph_args\\)"],
+        "semantic_type": "gdn_metadata",
+        "evidence": ["Qwen3.6 T100 decode trace and verified GDN graph metadata symbol."],
+        "confidence": "high"
+      },
+      {
         "id": "teco.review.blas_gemm_allreduce",
         "category": "gemm",
         "reason": "gemm:T100 single-device small-MN reduction algorithm",
@@ -896,29 +973,28 @@
       },
       {
         "id": "teco.review.delta_rule_recurrent",
-        "category": "其他elementwise",
+        "category": "GDN",
         "reason": "teco:source-review:delta_rule_recurrent",
-        "priority": 150,
+        "priority": 145,
         "patterns": [
-          "tecolmk_slave_fused_recurrent_gated_delta_rule"
+          "\\btecolmk_slave_fused_recurrent_gated_delta_rule(?:<[^<>]+>)?\\(FusedRecurrentGatedDeltaRuleArgs\\)"
         ],
-        "semantic_type": "linear_attention_state_update",
+        "semantic_type": "gdn_recurrent",
         "evidence": [
           "tecovllm:csrc/lmk/fused_recurrent_gated_delta_rule_fwd.cc:111 — Recurrent gated DeltaRule API operates on q/k/v/g/beta and initial/final state."
         ],
         "confidence": "high",
-        "ambiguity_reasons": [],
-        "notes": "The legacy other-elementwise report bucket is a compatibility bucket: this operator is not mathematically elementwise."
+        "ambiguity_reasons": []
       },
       {
         "id": "teco.review.delta_rule_chunk_state",
-        "category": "其他elementwise",
+        "category": "GDN",
         "reason": "teco:source-review:delta_rule_chunk_state",
-        "priority": 150,
+        "priority": 145,
         "patterns": [
-          "tecolmk_slave_compute_(?:v_new_last_state|o)\\(ChunkGatedDeltaRuleArgs"
+          "\\btecolmk_slave_compute_v_new_last_state(?:<[^<>]+>)?\\(ChunkGatedDeltaRuleArgs\\)"
         ],
-        "semantic_type": "linear_attention_state_update",
+        "semantic_type": "gdn_chunk_state",
         "evidence": [
           "tecovllm:csrc/lmk/chunk_gated_delta_rule_fwd.cc:124 — Chunk GatedDeltaRule API.",
           "tecovllm:vllm_sdaa/layers/fla/ops/chunk.py:38 — Linear attention function routes Q/K/V, beta, initial state into the chunk op."
@@ -928,14 +1004,24 @@
         "notes": "Require tecolmk namespace and ChunkGatedDeltaRuleArgs. Bare compute_o/compute_v_new are not safe global rules."
       },
       {
+        "id": "teco.gdn.chunk_output",
+        "category": "GDN",
+        "reason": "gdn:chunk-output",
+        "priority": 145,
+        "patterns": ["\\btecolmk_slave_compute_o(?:<[^<>]+>)?\\(ChunkGatedDeltaRuleArgs\\)"],
+        "semantic_type": "gdn_chunk_output",
+        "evidence": ["TecoLMK ChunkGatedDeltaRule API, compute_o launch confirmed in the Qwen3.6 trace."],
+        "confidence": "high"
+      },
+      {
         "id": "teco.review.delta_rule_chunk_prepare",
-        "category": "其他elementwise",
+        "category": "GDN",
         "reason": "teco:source-review:delta_rule_chunk_prepare",
-        "priority": 150,
+        "priority": 145,
         "patterns": [
-          "tecolmk_slave_compute_decay_mask_u_w\\(ChunkGatedDeltaRuleArgs"
+          "\\btecolmk_slave_compute_decay_mask_u_w(?:<[^<>]+>)?\\(ChunkGatedDeltaRuleArgs\\)"
         ],
-        "semantic_type": "linear_attention_prepare",
+        "semantic_type": "gdn_chunk_prepare",
         "evidence": [
           "tecovllm:csrc/lmk/chunk_gated_delta_rule_fwd.cc:124 — Chunk DeltaRule API; this named helper computes decay/mask/U/W."
         ],
@@ -944,13 +1030,13 @@
       },
       {
         "id": "teco.review.gdn_gating",
-        "category": "其他elementwise",
+        "category": "GDN",
         "reason": "teco:source-review:gdn_gating",
-        "priority": 150,
+        "priority": 145,
         "patterns": [
-          "tecolmk_slave_fused_gdn_gating"
+          "\\btecolmk_slave_fused_gdn_gating\\(FusedGDNGatingArgs\\)"
         ],
-        "semantic_type": "gating_elementwise",
+        "semantic_type": "gdn_gating",
         "evidence": [
           "tecovllm:csrc/lmk/fused_gdn_gating.cc:84 — Gating API uses tensors a/b/log_a_weight/bias and returns g/b_out."
         ],
