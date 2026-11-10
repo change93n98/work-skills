@@ -49,4 +49,4 @@ description: 在远程 T100 或 H100 节点按平台准备容器、启动 vLLM �
 
 ## 7. 抓 prof
 
-按 [Prof 采集](references/capture-prof.md) 执行。为诊断服务按采集用途设置 `--profiler-config`。先完成客户端预热，再依次执行 `start_profile`、目标请求和 `stop_profile`。需要分析 trace 时按任务使用 `llm-prof`。
+按 [Prof 采集](references/capture-prof.md) 执行。为诊断服务按采集用途设置 `--profiler-config`。按本次输入和并发抓取一个批次，目标输出默认 20 token。先完成客户端预热，再依次执行 `start_profile`、目标请求和 `stop_profile`。需要分析 trace 时按任务使用 `llm-prof`。

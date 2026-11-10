@@ -34,6 +34,8 @@
 
 按 [任务日志](logging.md) 将本次配置、预热、正式请求、采集开关和 trace 核对记入 `07-prof.log`。
 
+正式采集按任务指定输入和并发。默认只跑一个批次，每条请求的目标输出为 **20 token**。用原生 `vllm_requests.py` 时，`input_len` 和 `batch` 分别取本次输入长度和并发数，传 `--seqlen "$input_len,20" --batch "$batch" --request_nums "$batch"`。图文用例按本次输入设置图片尺寸和张数。用户明确指定输出长度或请求数时，按指定值执行。
+
 确认诊断服务就绪、模型名正确、trace 目录可写。准备两份原生请求脚本，指向同一个诊断实例。预热脚本按目标用例选取有代表性的输入类型、长度、图片尺寸和并发，把参数写在脚本里。预热请求应完整结束，失败时返回非零。客户端预热在采集开始前完成，与 profiler 内部的 `warmup_iterations` 分开。
 
 用 [采集脚本](../assets/capture_prof.sh) 依次执行预热和正式采集。`server` 使用诊断实例的 `host:port`，`warmup_script` 为预热脚本，`request_script` 为正式请求脚本。正式脚本的参数接在其路径后。使用 `bash -n` 检查后执行。
