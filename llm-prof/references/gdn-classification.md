@@ -19,6 +19,8 @@ Q/K 的两次 L2 Norm 在 T100 的 chunk Python 封装内执行，先于 `_C_sda
 
 对原生 trace，`scripts/gdn_context.py` 使用 GDN CPU scope、同线程包含关系和 flow/correlation 逐次识别共享核。T100 的卷积前向和状态更新可以共用 `teco_slave_causal_conv1d_perf`，须结合调用 scope 区分。通用 Norm 同时检查 GDN scope 和 CPU Norm 模式，输出门控 Norm 要有已验证的输出 scope。融合核时长整笔计入。
 
+T100 旧交付分支的核心 CPU 算子可记录为 `vllm::gdn_attention_core`，QKV 重排来自 `layers/mamba/gdn_linear_attn.py`。主分支可记录为 `vllm::qwen_gdn_attention_core`，QKV 重排来自 `mamba/gdn/qwen_gdn_linear_attn.py`。两种路径均通过同一套调用关联归因，通用核仍需落在已确认的 GDN scope 内。
+
 Decode 图回放中，专用核名仍可确认语义，例如 T100 递推、独立门控与 `gdn_prepare_cudagraph_impl`，以及 H100 的融合递推。`cudaGraphLaunch`、`sdaaGraphLaunch` 等只表明 replay 所属。若窗口内已有 GDN 递推证据，关联到 replay 的通用卷积、T100 通用 Norm 或已知 AOT 输出符号沿用原类别，在明细标 GDN 候选，在 JSON `gdn_comparison.graph_candidates` 记录候选调用次数、耗时和依据。需要补充归因时使用 [graph 双 trace 映射](graph-source-mapping.md)，确认源调用证据与映射歧义后再汇总。仅有 XLSX 时只用专用核名规则。
 
 ## T100 与 H100 对比

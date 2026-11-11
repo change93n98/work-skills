@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import sqlite3
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +12,45 @@ from prof import classify_rows
 
 
 class GdnClassificationTests(unittest.TestCase):
+    def test_legacy_delivery_scope_classifies_only_linked_device_calls(self):
+        trace = sqlite3.connect(":memory:")
+        self.addCleanup(trace.close)
+        trace.row_factory = sqlite3.Row
+        trace.create_function("extract_arg", 2, lambda *_: None)
+        trace.execute("CREATE TABLE thread_track (id, utid)")
+        trace.execute("INSERT INTO thread_track VALUES (1, 1)")
+        trace.execute("CREATE TABLE slice (id, name, category, ts, dur, track_id, arg_set_id)")
+        trace.executemany("INSERT INTO slice VALUES (?, ?, ?, ?, ?, 1, NULL)", [
+            (10, "vllm::gdn_attention_core", "cpu_op", 0, 30),
+            (11, "_C_sdaa::causal_conv1d_fn", "cpu_op", 1, 8),
+            (12, "/vllm/model_executor/layers/mamba/gdn_linear_attn.py(493): rearrange_mixed_qkv",
+             "python_function", 10, 8),
+            (13, "/vllm_sdaa/layers/fla/ops/chunk.py(16): l2norm", "python_function", 20, 8),
+        ])
+        conv = "teco_slave_causal_conv1d_perf(Args)"
+        copy = "Memcpy DtoD"
+        norm = "fused_norm(FusedNormArgs)"
+        runtimes = [dict(id=i, name="sdaaLaunchKernel", category="privateuse1_runtime",
+                         correlation=i, ts=ts, dur=1, host_thread=1, track_id=1)
+                    for i, ts in enumerate((2, 12, 22, 32), start=1)]
+        events = [dict(id=100+r["id"], name=name, category=category, correlation=r["id"],
+                       ts=r["ts"]+1, dur=1000, device=0, stream=1, track_id=2)
+                  for r, (name, category) in zip(runtimes, [
+                      (conv, "kernel"), (copy, "gpu_memcpy"), (norm, "kernel"), (copy, "gpu_memcpy")])]
+        index = DeviceStepIndex(events, runtimes, [], [], 0, lambda sid: [])
+        raw = [dict(name=name, record_count=count, total_duration_us=count, window_absolute_pct=count)
+               for name, count in ((conv, 1), (copy, 2), (norm, 1))]
+        classifier = KernelClassifier(platform="teco")
+        with patch("gdn_context.run_perfetto_query",
+                   side_effect=lambda tp, sql: [dict(row) for row in tp.execute(sql)]):
+            evidence = gdn_context(trace, raw, classifier, dict(
+                absolute_start_ts_ns="0", absolute_end_ts_ns="100000", track_ids=[2]), index)
+        self.assertEqual(evidence[conv]["semantic_type"], "gdn_conv")
+        self.assertEqual(evidence[norm]["semantic_type"], "gdn_qk_norm")
+        self.assertEqual([(part["classification"]["semantic_type"], part["event_ids"])
+                          for part in evidence[copy]["allocations"] if part["classification"]["category"] == "GDN"],
+                         [("gdn_rearrange_qkv", [102])])
+
     def test_verified_symbols_resolve_to_distinct_subtypes(self):
         teco = KernelClassifier(platform="teco")
         kernels = {

@@ -8,9 +8,11 @@ from graph_source_mapping import is_graph_launch
 from prof_analyze_perfetto import run_perfetto_query
 
 CORE_OPS = (
+    "vllm::gdn_attention_core",
     "vllm::qwen_gdn_attention_core",
     "vllm::qwen_gdn_attention_core_fused_norm_packed",
 )
+CORE_OPS_SQL = ", ".join(f"'{name}'" for name in CORE_OPS)
 SHARED_CATEGORIES = {"其他elementwise", "Triton", "memcpy/memset"}
 CORE_SUBSCOPES = {
     ": rearrange_mixed_qkv": "rearrange",
@@ -73,14 +75,14 @@ def _gdn_role(event, launches, scopes):
 
 def _source_scopes(tp, index):
     cpu_ops = ", ".join(f"'{name}'" for name in (
-        *CORE_OPS, "_C_sdaa::fused_norm", *(name for name in CORE_SUBSCOPES if name.startswith("_C_sdaa::"))))
+        "_C_sdaa::fused_norm", *(name for name in CORE_SUBSCOPES if name.startswith("_C_sdaa::"))))
     rows = run_perfetto_query(tp, f"""
         SELECT s.id, s.name, s.ts, s.dur, s.track_id, tt.utid AS host_thread,
             extract_arg(s.arg_set_id, 'args.Concrete Inputs[8]') AS norm_mode,
             extract_arg(s.arg_set_id, 'args.Input type[6]') AS gate_type
         FROM slice s LEFT JOIN thread_track tt ON tt.id=s.track_id
         WHERE s.dur >= 0 AND (
-            (s.category='cpu_op' AND s.name IN ({cpu_ops}))
+            (s.category='cpu_op' AND s.name IN ({CORE_OPS_SQL}, {cpu_ops}))
             OR (s.category='cpu_op' AND (
                 s.name LIKE '%::%causal_conv1d_update'
                 OR s.name LIKE '%::%causal_conv1d_fn'
@@ -89,6 +91,7 @@ def _source_scopes(tp, index):
                 s.name LIKE '%/mamba/gdn/qwen_gdn_linear_attn.py(%): _output_projection'
                 OR s.name LIKE '%/attention/backends/gdn_attn.py(%): _build_chunk_metadata'
                 OR s.name LIKE '%/mamba/gdn/qwen_gdn_linear_attn.py(%): rearrange_mixed_qkv'
+                OR s.name LIKE '%/layers/mamba/gdn_linear_attn.py(%): rearrange_mixed_qkv'
                 OR s.name LIKE '%/mamba/gdn/qwen_gdn_linear_attn.py(%): fi_chunk_gated_delta_rule'
                 OR s.name LIKE '%/mamba/gdn/qwen_gdn_linear_attn.py(%): fused_gdn_gating'
                 OR s.name LIKE '%/vllm_sdaa/layers/mamba/gdn_linear_attn.py(%): fused_gdn_gating'
@@ -147,9 +150,8 @@ def gdn_context(tp, raw, classifier, metadata, index=None, **device_scope):
     has_recurrent = any(detail["category"] == "GDN" and detail["semantic_type"].startswith("gdn_recurrent")
                         for detail in base.values())
     # A dedicated recurrent symbol can still identify a graph-only GDN window.
-    if not has_recurrent and not run_perfetto_query(tp, """SELECT 1 FROM slice WHERE category='cpu_op'
-        AND name IN ('vllm::qwen_gdn_attention_core',
-                     'vllm::qwen_gdn_attention_core_fused_norm_packed') LIMIT 1"""):
+    if not has_recurrent and not run_perfetto_query(tp, f"""SELECT 1 FROM slice WHERE category='cpu_op'
+        AND name IN ({CORE_OPS_SQL}) LIMIT 1"""):
         return {}
     if index is None:
         index = DeviceStepIndex.from_processor(tp, **device_scope)
