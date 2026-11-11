@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 from decimal import Decimal, InvalidOperation
 
 from gdn_comparison import summarize_gdn
@@ -264,8 +265,48 @@ def exporter_runtime(args):
     if not Path(node).is_file():
         node = shutil.which('node')
     if not node or not Path(modules).is_dir():
-        raise ValueError('XLSX needs artifact-tool: supply --node and --node-modules, or use --no-xlsx for JSON/CSV')
+        hint = '' if args.mode == 'compare' else ', or use --no-xlsx for JSON/CSV'
+        raise ValueError('XLSX needs artifact-tool: supply --node and --node-modules' + hint)
     return node, modules
+
+
+def compare_reports(args):
+    output = args.output.expanduser().resolve()
+    if output.suffix.lower() != '.xlsx':
+        raise ValueError('comparison output must be an .xlsx file')
+    paths = [p.expanduser().resolve() for p in (args.left, args.right)]
+    if paths[0] == paths[1]:
+        raise ValueError('comparison needs two distinct classification JSON files')
+    if output.exists() and not args.overwrite:
+        raise ValueError('comparison exists: choose another output or use --overwrite')
+    node, modules = exporter_runtime(args)
+    layout = json.loads((Path(__file__).resolve().parent.parent/'assets/report-layout.json').read_text(encoding='utf8'))
+    reports = []
+    for file in paths:
+        report = json.loads(file.read_text(encoding='utf-8-sig'))
+        if not isinstance(report, dict) or 'reports' in report or not isinstance(report.get('summary'), list):
+            raise ValueError(f'expected one classified window in {file}')
+        if report.get('source') and output == Path(report['source']).expanduser().resolve():
+            raise ValueError('comparison output must differ from both source files')
+        if not report.get('gdn_comparison') and report.get('kernels'):
+            report['gdn_comparison'] = summarize_gdn(report['kernels'], report.get('metadata', {}),
+                                                      layout['gdn_comparison_groups'])
+        reports.append(dict(report=report, path=str(file)))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.prof-compare-', dir=output.parent) as work:
+        request = Path(work)/'comparison.json'
+        staged = Path(work)/output.name
+        request.write_text(json.dumps(dict(reports=reports, names=[args.left_name, args.right_name],
+            title=args.title, workload_verified=args.workload_verified, workload_note=args.workload_note),
+            ensure_ascii=False), encoding='utf8')
+        subprocess.run([node, str(Path(__file__).with_name('export_prof_comparison.mjs')),
+                        str(request), str(staged), modules], check=True)
+        if args.overwrite:
+            staged.replace(output)
+        else:
+            os.link(staged, output)
+    print('Comparison:', output)
+    return 0
 
 
 def main(argv=None):
@@ -295,6 +336,19 @@ def main(argv=None):
     table = modes.add_parser('xlsx', help='Classify an exported XLSX, preserving original columns and file')
     table.add_argument('--xlsx', required=True, type=Path)
     table.add_argument('--sheet')
+    compare = modes.add_parser('compare', help='Compare two classified hardware windows in Excel')
+    compare.add_argument('--left', required=True, type=Path, help='First classification JSON')
+    compare.add_argument('--right', required=True, type=Path, help='Reference classification JSON')
+    compare.add_argument('--left-name', default='左侧')
+    compare.add_argument('--right-name', default='右侧')
+    compare.add_argument('--title', default='跨硬件算子性能对比')
+    compare.add_argument('--workload-verified', action='store_true',
+                         help='Enable observed performance ratios after checking model, stage and actual workload')
+    compare.add_argument('--workload-note', help='Record verified workload and hardware configuration')
+    compare.add_argument('--output', required=True, type=Path)
+    compare.add_argument('--node')
+    compare.add_argument('--node-modules')
+    compare.add_argument('--overwrite', action='store_true', help='Replace only the comparison workbook')
     for sub in (window,step,table):
         sub.add_argument('--output-dir', required=True, type=Path)
         sub.add_argument('--label', default='prof-report', help='Output filename prefix (letters, digits, dot, dash, underscore)')
@@ -305,6 +359,8 @@ def main(argv=None):
         add_classification_args(sub)
     args = parser.parse_args(argv)
     try:
+        if args.mode == 'compare':
+            return compare_reports(args)
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*',args.label):
             raise ValueError('unsafe --label')
         runtime = None if args.no_xlsx else exporter_runtime(args)

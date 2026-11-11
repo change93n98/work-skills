@@ -3,6 +3,7 @@ name: llm-prof
 description: >
   大模型推理 profiling 与 kernel 分类。支持三种入口：抓取 prof 并分析、已有 Perfetto 导出 XLSX 分类、
   trace 路径加起止时间或 step 编号直接生成分类表，支持通过调用关联定位首设备事件。
+  可将两份已分类的窗口导出跨硬件性能对比 XLSX。
   支持 NVIDIA、DCU、太初 T100，
   以及 graph-off 来源映射与 graph-on 耗时分析。触发词：prof分析、profiling、算子耗时、trace分析、片选区域分类。
 ---
@@ -18,6 +19,8 @@ description: >
 | 1. 抓取 prof 并分类 | 需要启动服务/运行 profiling | 读取 [抓取与自动阶段分析](references/capture-and-auto-analysis.md)，仅此模式收集模型、框架、并行、负载、节点/容器等启动参数 |
 | 2. 已有 XLSX 分类 | Perfetto 导出的 XLSX，或已有分类表 | `scripts/prof.py xlsx`，保留旧列，在新文件追加分类列和最新汇总 |
 | 3. trace 选窗分类 | trace 文件/目录，加起止时间或 step 编号 | 手工时间用 `scripts/prof.py window`；按关联自动选 step 用 `scripts/prof.py step`，无需打开 UI |
+
+已有两份分类 JSON、需要比较不同硬件时，按 [跨硬件性能对比模板](references/hardware-comparison.md) 使用 `scripts/prof.py compare`。固定展示类别耗时、GDN 逻辑分项和实际窗口工作量。可比性核实后才填观测性能比，窗口或工作量不一致时保留观测耗时比。
 
 用户给 trace 但没有时间时先检查阶段标记，decode 默认选关联设备边界的 step2，并说明编号和依据；prefill 总范围可显式选择首个 prefill 与首个 decode 的 annotation。旧的 [自动阶段分析](references/capture-and-auto-analysis.md) 保留给明确需要原有主机阶段口径的任务，不作为关联失败时的静默回退。只有要求 Python/CPU 来源时才额外读取 [graph 双 trace 映射](references/graph-source-mapping.md)，不必为分类采集双 trace。
 
