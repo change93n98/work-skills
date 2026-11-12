@@ -21,3 +21,15 @@ bash "$log_step" "$log_dir/01-node.log" ssh "$ssh_target" bash -s < "$probe_scri
 构建、安装、启动或测试由多条命令完成时，把各条命令的输出追加到同一阶段日志，或先写成本次执行脚本再交给日志脚本。后台运行批处理时把日志脚本放在后台命令内部，记录实际任务退出结果。服务就绪、产物核对等后续检查也写入对应阶段日志，最后记录阶段状态和产物路径。
 
 容器内日志和产物写到宿主可回查的挂载目录。不同节点或本机与远端目录各自保存时，交付时标明节点、容器内路径和宿主绝对路径。重试继续追加阶段日志，可能覆盖的原生明细写入新的尝试目录，并记录该目录。保存本次使用的脚本和脱敏后的配置摘要，凭据通过原有认证渠道传入。
+
+## 查看远端文件
+
+远端生成的脚本、日志和结果默认保留在节点上。交付时写明 SSH 别名和宿主机绝对路径。容器内文件先通过挂载关系确认宿主路径，再交付可打开的路径。
+
+在本地会话中，以代码格式展示远端路径，并提供 VS Code Remote-SSH 打开命令。`ssh_target` 是已配置的 SSH 别名，`host_file` 是确认可读的宿主机文件路径。 [VS Code Remote-SSH 命令行](https://code.visualstudio.com/docs/remote/troubleshooting#_connect-to-a-remote-host-from-the-terminal)
+
+```bash
+code --remote "ssh-remote+$ssh_target" "$host_file"
+```
+
+需要在对话里看内容时，通过 `ssh-skill` 只读查看远端文件。只有用户明确要求下载时才保存本地副本。
